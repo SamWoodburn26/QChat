@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/spfx-build/package-solution.schema.json",
+  "solution": {
+    "name": "q-chat-client-side-solution",
+    "id": "05c83b57-73c0-4fd1-8f9f-0160e3f4cccd",
+    "version": "1.0.0.0",
+    "includeClientSideAssets": true,
+    "skipFeatureDeployment": true,
+    "isDomainIsolated": false,
+    "developer": {
+      "name": "",
+      "websiteUrl": "",
+      "privacyUrl": "",
+      "termsOfUseUrl": "",
+      "mpnId": "Undefined-1.20.0"
+    },
+    "metadata": {
+      "shortDescription": {
+        "default": "qChat description"
+      },
+      "longDescription": {
+        "default": "qChat description"
+      },
+      "screenshotPaths": [],
+      "videoUrl": "",
+      "categories": []
+    },
+    "features": [
+      {
+        "title": "q-chat Feature",
+        "description": "The feature that activates elements of the q-chat solution.",
+        "id": "a2923320-1527-4223-8d9c-716866f636c2",
+        "version": "1.0.0.0"
+      }
+    ]
+  },
+  "paths": {
+    "zippedPackage": "solution/q-chat.sppkg"
+  }
+}
