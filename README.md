@@ -1,3 +1,6 @@
+
+# QChat
+Senior Project- An AI powered chatbot for our Universities student information portal
 # q-chat
 
 ## Summary
