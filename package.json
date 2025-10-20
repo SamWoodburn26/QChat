@@ -2,7 +2,7 @@
   "name": "q-chat",
   "version": "0.0.1",
   "private": true,
-  "type": "module",
+  "type": "commonjs",
   "engines": {
     "node": ">=18.17.1 <19.0.0"
   },

@@ -32,3 +32,14 @@
     }
   }
 }
+
+/* Main chat area background using Quinnipiac image */
+.chatMain {
+  /* increased transparency: lower overlay alpha so background shows through more */
+  background-image: linear-gradient(rgba(255,255,255,0.6), rgba(255,255,255,0.6)), url('../assets/Quinnipiac_University-442438439.png');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  padding: 18px;
+  border-radius: 8px;
+}
