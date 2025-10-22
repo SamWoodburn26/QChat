@@ -35,3 +35,7 @@ obj
 
 # Environment variables
 .env
+.venv
+
+# local settings
+src/backend/qchatAPI/local.settings.json

@@ -1,0 +1,8 @@
+#for imports
+azure-functions
+langchain
+langchain-core
+langchain-ollama
+httpx
+requests
+pymongo

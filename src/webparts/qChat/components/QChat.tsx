@@ -8,17 +8,20 @@ import styles from './QChat.module.scss';
 type Msg = { role: 'user' | 'assistant'; text: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
 
+// local host for the llm- connects to backend
+const llm_base = 'http://localhost:7071';
+
 export default function QChat() {
   // Visible messages in the active conversation (or in-progress messages before save)
   const [msgs, setMsgs] = React.useState<Msg[]>([
-    { role: 'assistant', text: 'Hi! Ask me about MyQ resources.' }
+    { role: 'assistant', text: 'Hi! As me about MyQ resources.' }
   ]);
 
   const [input, setInput] = React.useState('');
   const [showPage, setShowPage] = React.useState(false);
   const [showHelpTab, setShowHelpTab] = React.useState(false);
   const [showTips, setShowTips] = React.useState(true);
-  const [historyOpen, setHistoryOpen] = React.useState(true);
+  const [historyOpen, setHistoryOpen] = React.useState(false);
 
   // Load saved conversations from localStorage on first render. We keep most recent first.
   const [history, setHistory] = React.useState<Conversation[]>(() => {
@@ -44,15 +47,30 @@ export default function QChat() {
   async function onSend(e?: React.FormEvent) {
     e?.preventDefault();
     if (!input.trim()) return;
+    const msg = input.trim();
 
     const user = { role: 'user' as const, text: input.trim() };
     // Add to the UI immediately (optimistic update). Replies from the assistant would be appended later.
     setMsgs(m => [...m, user]);
 
     //echo
-    const assistant = { role: 'assistant' as const, text: user.text};
-    setMsgs(m => [...m, assistant]);
+    //const assistant = { role: 'assistant' as const, text: user.text};
+    // setMsgs(m => [...m, assistant]);
     // Here you would call your LLM/assistant API and append the assistant response to `msgs` when ready.
+    // call to llm backend
+    try {
+      const result = await fetch(`${llm_base}/api/chat`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: msg}),
+      });
+      const data = await result.json();
+      const assistant: Msg = {role: 'assistant', text: data.reply ?? '(no reply)'};
+      setMsgs(m => [...m, assistant]);
+    }catch{
+      setMsgs(m => [...m, {role: 'assistant', text: "could not access llm"}]);
+    }
+
     setInput('');//reset textbox
 
 
