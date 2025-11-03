@@ -6,3 +6,4 @@ langchain-ollama
 httpx
 requests
 pymongo
+python-dotenv

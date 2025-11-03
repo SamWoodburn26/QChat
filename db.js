@@ -1,3 +1,4 @@
+//Testing the connection to MongoDB and for collections 
 import { MongoClient } from "mongodb";
 //Help connecting to MONGO DB
 import dotenv from "dotenv";
