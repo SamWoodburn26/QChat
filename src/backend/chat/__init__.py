@@ -2,99 +2,177 @@ import azure.functions as func
 import json, os
 from datetime import datetime
 from pymongo import MongoClient
+import certifi
+import requests
 
-# ollama to make the gemma model
-from langchain_ollama import ChatOllama, OllamaEmbeddings
-from langchain_core.vectorstores import InMemoryVectorStore
+# Ollama-backed chat via LangChain
+from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-
+from langchain_core.output_parsers import StrOutputParser
+import re
+from pathlib import Path
 
 # MongoDB Configuration
 MONGO_URI = os.environ.get('MONGODB_URI') or os.getenv('MONGODB_URI')
 DATABASE_NAME = os.environ.get('DB_NAME', 'qchat')
 CHAT_LOGS_COLLECTION = 'chatLogs'
+# Allow turning off DB logging entirely via env
+QCHAT_LOG_CHATS = (os.getenv('QCHAT_LOG_CHATS', 'true').lower() == 'true')
 
 # MongoDB client (global)
 mongo_client = None
 db = None
+# One-time DB check flags
+_db_checked = False
+_db_ready = False
+_db_error = None
 
-# for ollama
-llm = ChatOllama(model="mistral:latest", base_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
-embeddings = OllamaEmbeddings(model="mistral:latest")
-vector_store = InMemoryVectorStore(embeddings)
+def _init_db_once():
+    """Attempt to initialize Mongo only once per process.
+    Sets _db_ready/_db_checked accordingly and avoids repeated slow failures.
+    """
+    global mongo_client, db, _db_checked, _db_ready, _db_error
+    if _db_checked:
+        return
+    _db_checked = True
+    _db_ready = False
+    _db_error = None
+    if not (QCHAT_LOG_CHATS and MONGO_URI):
+        return
+    try:
+        mongo_kwargs = {
+            "serverSelectionTimeoutMS": 3000,
+            "connectTimeoutMS": 3000,
+            "socketTimeoutMS": 3000,
+        }
+        if MONGO_URI.startswith("mongodb+srv") or "mongodb.net" in MONGO_URI:
+            # Atlas requires TLS
+            mongo_kwargs["tls"] = True
+            mongo_kwargs["tlsCAFile"] = certifi.where()
+        mc = MongoClient(MONGO_URI, **mongo_kwargs)
+        # Ping to verify connectivity
+        mc.admin.command("ping")
+        mongo_client = mc
+        db = mongo_client[DATABASE_NAME]
+        _db_ready = True
+    except Exception as e:
+        print("Mongo one-time init failed:", repr(e))
+        mongo_client = None
+        db = None
+        _db_ready = False
+        _db_error = repr(e)
 
-# QChat System Prompt
-SYSTEM_PROMPT = """You are QChat, a helpful assistant for Quinnipiac University students.
-Answer questions clearly and concisely. If you don't know something, say so.
-Be friendly, professional, and helpful."""
 
-#It dynamically fills in the “question” field and sends it to the LLM.
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")
+_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
+_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "256"))
+
+def _preload_model():
+    try:
+        # Preload and keep the model warm to reduce first-token latency
+        requests.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={"model": OLLAMA_MODEL, "messages": [], "keep_alive": -1},
+            timeout=2,
+        )
+    except Exception:
+        pass
+
+_preload_model()
+
+# LangChain LLM configured to call local Ollama (tuned for speed)
+llm = ChatOllama(
+    model=OLLAMA_MODEL,
+    base_url=OLLAMA_URL,
+    temperature=0.2,
+    num_ctx=_NUM_CTX,
+    model_kwargs={"num_predict": _NUM_PREDICT},
+)
+
+
 prompt_template = ChatPromptTemplate.from_messages([
-    ("system", SYSTEM_PROMPT),
-    ("human", "{question}")
+    ("system",
+     "You are a helpful assistant for Quinnipiac University named QChat. "
+     "Assume all user questions are about Quinnipiac University unless the user explicitly specifies otherwise. "
+     "For ambiguous queries, interpret them in the Quinnipiac context (events, campuses, services). "
+     "If you truly cannot answer with available knowledge, say 'I don't know.' Do not fabricate details."),
+    ("human", "Context:\n{context}\n\nQuestion: {question}")
 ])
 
-#Each time the function is called, it returns the current connection 
-# and checks whether the connection is active using db.command(‘ping’). 
-def get_db():
-    """MongoDB connection"""
-    global mongo_client, db
-    if db is None:
-        mongo_client = MongoClient(MONGO_URI)
-        db = mongo_client[DATABASE_NAME]
-        db.command('ping')
-        print("MongoDB connected")
-    return db
+# Build a simple LCEL chain: prompt -> model -> string parser
+_parser = StrOutputParser()
+chain = prompt_template | llm | _parser
 
-
-def save_message(user_id, session_id, message, response):
-    """Save chat to MongoDB"""
-    try:
-        database = get_db()
-        chat_logs = database[CHAT_LOGS_COLLECTION]
-        
-        doc = {
-            'userId': user_id,
-            'sessionId': session_id,
-            'timestamp': datetime.utcnow(),
-            'message': message,
-            'response': response
-        }
-        
-        result = chat_logs.insert_one(doc)
-        print(f"Saved: {result.inserted_id}")
-        return str(result.inserted_id)
-    except Exception as e:
-        print(f"Save error: {e}")
-        return None
-
-
-def get_history(user_id, session_id=None, limit=50):
-    """Get chat history"""
-    try:
-        database = get_db()
-        chat_logs = database[CHAT_LOGS_COLLECTION]
-        
-        query = {'userId': user_id}
-        if session_id:
-            query['sessionId'] = session_id
-        
-        messages = []
-        for doc in chat_logs.find(query).sort('timestamp', -1).limit(limit):
-            messages.append({
-                'id': str(doc['_id']),
-                'timestamp': doc['timestamp'].isoformat(),
-                'message': doc['message'],
-                'response': doc['response'],
-                'sessionId': doc.get('sessionId')
-            })
-        
-        return messages[::-1]
-    except Exception as e:
-        print(f"History error: {e}")
+# Profanity filtering utilities (applied to BOT replies only)
+def load_profanity_list():
+    path = Path(__file__).parent / "profanity_list.txt"
+    if not path.exists():
         return []
+    with open(path, "r", encoding="utf-8") as f:
+        return [line.strip() for line in f if line.strip() and not line.startswith("#")]
 
+_PROFANITY_WORDS = load_profanity_list()
 
+def _char_class(ch: str) -> str:
+    m = {
+        'a': ['a', '@', '4'],
+        'b': ['b', '8'],
+        'e': ['e', '3'],
+        'g': ['g', '9'],
+        'i': ['i', '1', '!', 'l'],
+        'l': ['l', '1', 'i'],
+        'o': ['o', '0'],
+        's': ['s', '5', '$'],
+        't': ['t', '7'],
+        'z': ['z', '2'],
+    }
+    ch = ch.lower()
+    if ch.isalpha() or ch.isdigit():
+        if ch in m:
+            chars = ''.join(sorted(set(m[ch])))
+            return f"[{re.escape(chars)}]"
+        return f"[{re.escape(ch)}]"
+    return re.escape(ch)
+
+def _token_to_pattern(token: str) -> str:
+    parts = []
+    for c in token:
+        if c.isspace():
+            parts.append(r"\W{0,3}")
+        else:
+            parts.append(f"(?:{_char_class(c)}{{1,3}})")
+            parts.append(r"\W{0,2}")
+    if parts and parts[-1] == r"\W{0,2}":
+        parts.pop()
+    return ''.join(parts)
+
+def _build_profanity_regex(words: list[str]):
+    if not words:
+        return None
+    patterns = []
+    for w in words:
+        tokens = w.split()
+        if not tokens:
+            continue
+        token_patterns = [_token_to_pattern(t) for t in tokens]
+        phrase_pat = r"\b" + r"\W{0,3}".join(token_patterns) + r"\b"
+        patterns.append(phrase_pat)
+    if not patterns:
+        return None
+    try:
+        combined = "|".join(patterns)
+        return re.compile(combined, re.IGNORECASE)
+    except re.error:
+        basic = r"|".join([rf"\b{re.escape(w)}\b" for w in words])
+        return re.compile(basic, re.IGNORECASE)
+
+_PROFANITY_REGEX = _build_profanity_regex(_PROFANITY_WORDS)
+
+def sanitize_text(text: str) -> str:
+    if not _PROFANITY_REGEX:
+        return text
+    return _PROFANITY_REGEX.sub("****", text or "")
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
     try:
@@ -102,51 +180,57 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     except ValueError:
         body = {}
     
-    action = body.get("action", "chat")
-    user_id = body.get("userId")
+    # Backward-compatible parameter parsing (supports body and querystring)
+    action = body.get("action") or req.params.get("action") or "chat"
+    user_id = body.get("userId") or req.params.get("userId") or "anonymous"
+    msg = ""
     
-    # userId kontrolü
-    if not user_id:
-        return func.HttpResponse('{"error":"userId required"}', status_code=400, mimetype="application/json")
-    
-    # CHAT ACTION
-    if action == "chat":
-        msg = (body.get("message") or "").strip()
-        session_id = body.get("sessionId")
-        
-        if not msg or not session_id:
-            return func.HttpResponse('{"error":"message and sessionId required"}', status_code=400, mimetype="application/json")
-        
-        try:
-            formatted = prompt_template.format_messages(question=msg)
-            reply = llm.invoke(formatted).content.strip()
-        except Exception as e:
-            print("LLM error: ", repr(e))
-            reply = "I'm having trouble right now. Please try again or contact IT Help Desk."
-        
-        # MongoDB'ye kaydet
-        msg_id = save_message(user_id, session_id, msg, reply)
-        
-        return func.HttpResponse(
-            json.dumps({
-                "response": reply,
-                "messageId": msg_id,
-                "timestamp": datetime.utcnow().isoformat()
-            }),
-            mimetype="application/json"
-        )
-    
-    # HISTORY ACTION
-    elif action == "history":
-        session_id = body.get("sessionId")
-        limit = body.get("limit", 50)
-        
-        history = get_history(user_id, session_id, limit)
-        
-        return func.HttpResponse(
-            json.dumps({"history": history}),
-            mimetype="application/json"
-        )
-    
+    # For now, treat any action as 'chat' (backward compatibility)
+    if action == "health":
+        # Return health diagnostics for DB connectivity and model config
+        _init_db_once()
+        info = {
+            "dbReady": _db_ready,
+            "dbName": DATABASE_NAME,
+            "loggingEnabled": QCHAT_LOG_CHATS,
+            "hasMongoUri": bool(MONGO_URI),
+            "error": _db_error,
+        }
+        return func.HttpResponse(json.dumps(info), mimetype="application/json")
+    elif action == "chat":
+        msg = (body.get("message") or req.params.get("message") or "").strip()
     else:
-        return func.HttpResponse('{"error":"unknown action"}', status_code=400, mimetype="application/json")
+        # Fall back to chat if unknown action provided
+        msg = (body.get("message") or req.params.get("message") or "").strip()
+    
+    if not msg:
+        return func.HttpResponse('{"error":"missing message"}', status_code=400, mimetype="application/json")
+
+    try:
+        # Invoke via LCEL chain; no external context wired yet.
+        reply_text = chain.invoke({
+            "context": "",
+            "question": msg,
+        }).strip()
+        # Only censor the bot's own response
+        reply = sanitize_text(reply_text)
+    except Exception as e:
+        print("LLM error: ", repr(e))
+        reply = "local model is unavailable"
+
+    # One-time DB connectivity check and optional logging
+    _init_db_once()
+    if _db_ready and db is not None:
+        try:
+            db[CHAT_LOGS_COLLECTION].insert_one({
+                "userId": user_id,
+                "action": action,
+                "message": msg,
+                "reply": reply,
+                "ts": datetime.utcnow(),
+            })
+        except Exception as e:
+            # Do not attempt to re-initialize; skip logging silently after first failure
+            print("Mongo insert error:", repr(e))
+
+    return func.HttpResponse(json.dumps({"reply": reply}), mimetype="application/json")

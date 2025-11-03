@@ -1,6 +1,7 @@
 import os
 from pymongo import MongoClient
 from dotenv import load_dotenv
+import certifi
 
 load_dotenv()
 
@@ -18,9 +19,22 @@ class Database:
     def connect(self):
         if self._client is None:
             mongodb_uri = os.getenv('MONGODB_URI', 'mongodb://localhost:27017/')
-            self._client = MongoClient(mongodb_uri)
-            self._db = self._client['qchat']
-            print("MongoDB connected successfully")
+            db_name = os.getenv('DB_NAME', 'qchat')
+            kwargs = {}
+            if mongodb_uri.startswith('mongodb+srv') or 'mongodb.net' in mongodb_uri:
+                kwargs['tls'] = True
+                kwargs['tlsCAFile'] = certifi.where()
+                kwargs['serverSelectionTimeoutMS'] = 4000
+            self._client = MongoClient(mongodb_uri, **kwargs)
+            # Actively verify connectivity to avoid lazy failures later
+            try:
+                self._client.admin.command('ping')
+                print("MongoDB ping successful")
+            except Exception as e:
+                print("MongoDB ping failed:", repr(e))
+                # Keep the client but note that operations may fail until network is fixed
+            self._db = self._client[db_name]
+            print(f"Using database: {db_name}")
         return self._db
     
     def get_collection(self, collection_name):
