@@ -5,7 +5,8 @@
       "FUNCTIONS_WORKER_RUNTIME": "python",
       "MONGODB_URI": "mongodb+srv://scwoodburn9203_db_user:GgkhVgAFRUsViZjZ@qchatcluster1.td7fvw4.mongodb.net/?retryWrites=true&w=majority&appName=qChatCluster1",
       "OLLAMA_URL": "http://localhost:11434",
-      "OLLAMA_MODEL": "mistral"
+      "OLLAMA_MODEL": "mistral",
+      "QCHAT_URLS_PATH": "qu_docs.txt"
     },
   "Host": { "CORS": "*" }
 }
