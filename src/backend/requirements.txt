@@ -6,3 +6,6 @@ langchain-ollama
 httpx
 requests
 pymongo
+certifi
+python-dotenv
+python-dotenv

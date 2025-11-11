@@ -1,0 +1,13 @@
+# Profanity list (one term per line)
+#
+# Notes:
+# - This list is used to censor the BOT'S OWN REPLIES only.
+# - User messages are NOT blocked or modified.
+# - Matching is case-insensitive and uses word boundaries.
+# - Add one word or phrase per line. Lines starting with # are comments.
+# - Keep this list appropriate for your deployment and audience.
+#
+# Examples (mild terms shown; extend as needed):
+crap
+heck
+darn
