@@ -1,3 +1,13 @@
+
+# ollama to make the gemma model
+from langchain_ollama import ChatOllama, OllamaEmbeddings
+from langchain_core.prompts import ChatPromptTemplate
+
+import azure.functions as func
+import json, os
+
+from .RAG import store_from_txt
+
 import azure.functions as func
 import json, os
 from datetime import datetime
@@ -82,23 +92,37 @@ def _preload_model():
 _preload_model()
 
 # LangChain LLM configured to call local Ollama (tuned for speed)
-llm = ChatOllama(
-    model=OLLAMA_MODEL,
-    base_url=OLLAMA_URL,
-    temperature=0.2,
-    num_ctx=_NUM_CTX,
-    model_kwargs={"num_predict": _NUM_PREDICT},
-)
 
+# llm = ChatOllama(
+#     model=OLLAMA_MODEL,
+#     base_url=OLLAMA_URL,
+#     temperature=0.2,
+#     num_ctx=_NUM_CTX,
+#     model_kwargs={"num_predict": _NUM_PREDICT},
+# )
 
+# for ollama llm model and embeddings
+llm = ChatOllama(model="mistral:latest", base_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
+embeddings = OllamaEmbeddings(model="nomic-embed-text");
+
+# prompt to only use given context
 prompt_template = ChatPromptTemplate.from_messages([
     ("system",
-     "You are a helpful assistant for Quinnipiac University named QChat. "
-     "Assume all user questions are about Quinnipiac University unless the user explicitly specifies otherwise. "
-     "For ambiguous queries, interpret them in the Quinnipiac context (events, campuses, services). "
-     "If you truly cannot answer with available knowledge, say 'I don't know.' Do not fabricate details."),
+     "You are a helpful assistant. Use ONLY the provided context to answer.\n"
+     "If the answer is not in the provided context, say: 'I don't know.' Do not guess."),
     ("human", "Context:\n{context}\n\nQuestion: {question}")
 ])
+
+_vector_store = None
+
+# get vector store using RAG.py function and qu_docs txt files
+def get_vector_store():
+    global _vector_store
+    if _vector_store is None:
+        _vector_store = store_from_txt("qu_docs.txt")
+    return _vector_store
+
+
 
 # Build a simple LCEL chain: prompt -> model -> string parser
 _parser = StrOutputParser()
@@ -174,11 +198,30 @@ def sanitize_text(text: str) -> str:
         return text
     return _PROFANITY_REGEX.sub("****", text or "")
 
+# answer using rag
+def answer_with_rag(question:str) -> dict:
+    vector_store = get_vector_store()
+    docs = vector_store.similarity_search(question, k=4)
+    ctx = "\n\n".join(d.page_content for d in docs)
+    reply = llm.invoke(prompt_template.invoke({"context": ctx, "question": question})).content.strip()
+    sources = [d.metadata.get("source") for d in docs if d.metadata.get("source")]
+    print(f"Retrieved {len(docs)} docs from {len(sources)} sources")
+    reply = sanitize_text(reply)
+    return {"reply": reply, "sources": sources}
+
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    if req.method == "OPTIONS":
+        response = func.HttpResponse("")
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        return response
+    print("main called")
     try:
         body = req.get_json()
     except ValueError:
         body = {}
+
     
     # Backward-compatible parameter parsing (supports body and querystring)
     action = body.get("action") or req.params.get("action") or "chat"
@@ -208,15 +251,22 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     try:
         # Invoke via LCEL chain; no external context wired yet.
-        reply_text = chain.invoke({
-            "context": "",
-            "question": msg,
-        }).strip()
-        # Only censor the bot's own response
-        reply = sanitize_text(reply_text)
+        rag_result = answer_with_rag(msg)
+        reply_text = rag_result["reply"]
+        sources = rag_result["sources"]
+
+        reply  = {"reply": reply_text, "sources": sources}
     except Exception as e:
-        print("LLM error: ", repr(e))
-        reply = "local model is unavailable"
+        print("RAG error: ", repr(e))
+        reply = {"reply": "I don't know.", "sources":[]}
+
+    response = func.HttpResponse(
+        json.dumps(reply),
+        mimetype="application/json"
+    )
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
 
     # One-time DB connectivity check and optional logging
     _init_db_once()
@@ -233,4 +283,5 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             # Do not attempt to re-initialize; skip logging silently after first failure
             print("Mongo insert error:", repr(e))
 
-    return func.HttpResponse(json.dumps({"reply": reply}), mimetype="application/json")
+    return response
+

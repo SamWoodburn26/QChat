@@ -9,7 +9,9 @@ type Msg = { role: 'user' | 'assistant'; text: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
 
 // local host for the llm- connects to backend
-const llm_base = 'https://subcollegiate-jaelynn-punningly.ngrok-free.dev';
+//const llm_base = 'http://localhost:7071';
+const llm_base = 'https://ropier-subtetanical-isla.ngrok-free.dev';
+//const llm_base = 'https://subcollegiate-jaelynn-punningly.ngrok-free.dev';
 
 export default function QChat() {
   // Visible messages in the active conversation (or in-progress messages before save)
@@ -69,9 +71,19 @@ export default function QChat() {
         throw new Error(`HTTP ${result.status}`);
       }
       
+      // const data = await result.json();
+      // const assistantText = data.response ?? '(no reply)';
+      // const assistant: Msg = {role: 'assistant', text: assistantText};
       const data = await result.json();
-      const assistantText = data.response ?? '(no reply)';
-      const assistant: Msg = {role: 'assistant', text: assistantText};
+      const reply = data.reply || '(no reply)';
+      const sources = Array.isArray(data.sources) ? data.sources : [];
+
+      let text = reply;
+      if (sources.length > 0) {
+        text += `\n\nSources: ${sources.slice(0, 3).join(', ')}${sources.length > 3 ? '...' : ''}`;
+      }
+
+      const assistant: Msg = { role: 'assistant', text };
       setMsgs(m => [...m, assistant]);
 
       // Persist conversation state to history (in-memory only)

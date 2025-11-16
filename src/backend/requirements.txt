@@ -3,9 +3,10 @@ azure-functions
 langchain
 langchain-core
 langchain-ollama
+bs4
+faiss-cpu==1.8.0
 httpx
 requests
-pymongo
+pymongo 
 certifi
-python-dotenv
 python-dotenv
