@@ -76,11 +76,13 @@ export default function QChat() {
       // const assistant: Msg = {role: 'assistant', text: assistantText};
       const data = await result.json();
       const reply = data.reply || '(no reply)';
-      const sources = Array.isArray(data.sources) ? data.sources : [];
+      const sources: string[] = Array.isArray(data.sources) ? data.sources : [];
 
       let text = reply;
       if (sources.length > 0) {
-        text += `\n\nSources: ${sources.slice(0, 3).join(', ')}${sources.length > 3 ? '...' : ''}`;
+        const top_two = sources.slice(0,2);
+        const links = top_two.map(src => '.[${src}](${src}){target="_blank"}').join("\n");
+        text += '\n\n Sources: \n{links}';
       }
 
       const assistant: Msg = { role: 'assistant', text };

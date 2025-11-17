@@ -28,6 +28,8 @@ DATABASE_NAME = os.environ.get('DB_NAME', 'qchat')
 CHAT_LOGS_COLLECTION = 'chatLogs'
 # Allow turning off DB logging entirely via env
 QCHAT_LOG_CHATS = (os.getenv('QCHAT_LOG_CHATS', 'true').lower() == 'true')
+# greetings to aviod rag answering
+GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
 
 # MongoDB client (global)
 mongo_client = None
@@ -92,25 +94,30 @@ def _preload_model():
 _preload_model()
 
 # LangChain LLM configured to call local Ollama (tuned for speed)
-
-# llm = ChatOllama(
-#     model=OLLAMA_MODEL,
-#     base_url=OLLAMA_URL,
-#     temperature=0.2,
-#     num_ctx=_NUM_CTX,
-#     model_kwargs={"num_predict": _NUM_PREDICT},
-# )
+llm = ChatOllama(
+    model=OLLAMA_MODEL,
+    base_url=OLLAMA_URL,
+    temperature=0.2,
+    num_ctx=_NUM_CTX,
+    model_kwargs={"num_predict": _NUM_PREDICT},
+)
 
 # for ollama llm model and embeddings
-llm = ChatOllama(model="mistral:latest", base_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
+#llm = ChatOllama(model="mistral:latest", base_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
 embeddings = OllamaEmbeddings(model="nomic-embed-text");
 
 # prompt to only use given context
 prompt_template = ChatPromptTemplate.from_messages([
     ("system",
-     "You are a helpful assistant. Use ONLY the provided context to answer.\n"
-     "If the answer is not in the provided context, say: 'I don't know.' Do not guess."),
-    ("human", "Context:\n{context}\n\nQuestion: {question}")
+     "You are QChat, a helpful assistant for Quinnipiac University.\n"
+     "Your job is to answer using ONLY the provided context.\n\n"
+     "RULES:\n"
+     "- If the answer is in the context → answer clearly and concisely.\n"
+     "- If the question is a greeting (hi, hello, hey, etc.) → respond friendly and invite a real question.\n"
+     "- If the answer is NOT in the context and NOT a greeting → say: 'I don't know. Try asking about dining, housing, athletics, or MyQ.'\n"
+     "- NEVER make up information.\n"
+     "- ALWAYS be helpful and positive.\n"),
+    ("human", "Context:\n{context}\n\nUser: {question}")
 ])
 
 _vector_store = None
@@ -200,6 +207,12 @@ def sanitize_text(text: str) -> str:
 
 # answer using rag
 def answer_with_rag(question:str) -> dict:
+     # manage answering hi
+    if GREETINGS_LIST.search(question.strip()):
+        return{
+            "reply": "Hi! I'm QChat.  Ask me anything about Quinnipiac University!",
+            "sources": []
+        }
     vector_store = get_vector_store()
     docs = vector_store.similarity_search(question, k=4)
     ctx = "\n\n".join(d.page_content for d in docs)
