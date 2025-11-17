@@ -1,12 +1,6 @@
-const { MongoClient } = require("mongodb");
-const dotenv = require("dotenv");
+// faq_questions.js - Quinnipiac University Real FAQs
 
-dotenv.config({ debug: true });
-
-const uri = process.env.MONGO_URI;
-const client = new MongoClient(uri);
-
-const expandedUniversityInfo = [
+const faqQuestions = [
   {
     
     category: "Student Experience and Residential Life",
@@ -359,49 +353,7 @@ const expandedUniversityInfo = [
     answer: "Refunds for accounts in credit balance are issued within 14 days of the school receiving funds, either via direct deposit or mailed check.",
     keywords: ["refund", "credit balance", "direct deposit"]
   }
+
 ];
+module.exports = faqQuestions;
 
-async function populateDatabase() {
-  try {
-    await client.connect();
-    console.log("Connected to MongoDB");
-
-    const db = client.db("qchat");
-    
-    // Clear existing data
-    console.log("\nClearing existing university info...");
-    await db.collection("universityInfo").deleteMany({});
-    
-    // Insert expanded FAQ data
-    console.log("\nInserting expanded FAQ database...");
-    const result = await db.collection("universityInfo").insertMany(expandedUniversityInfo);
-    console.log(`Inserted ${result.insertedCount} FAQ documents`);
-    
-    // Verify the data
-    console.log("\n Database Statistics:");
-    const infoCount = await db.collection("universityInfo").countDocuments();
-    const categories = await db.collection("universityInfo").distinct("category");
-    
-    console.log(`   Total FAQs: ${infoCount} documents`);
-    console.log(`   Categories: ${categories.length}`);
-    console.log(`   Categories: ${categories.join(", ")}`);
-    
-    // Show sample from each category
-    console.log("\n📋 Sample FAQs by Category:");
-    for (const cat of categories) {
-      const sample = await db.collection("universityInfo").findOne({ category: cat });
-      console.log(`\n   ${cat}:`);
-      console.log(`   Q: ${sample.question}`);
-    }
-    
-    console.log("\n Database populated successfully!");
-
-  } catch (error) {
-    console.error("Error:", error);
-  } finally {
-    await client.close();
-    console.log("\n Connection closed");
-  }
-}
-
-populateDatabase();
