@@ -1,0 +1,67 @@
+/* Removed SCSS @import – you'll handle any global styles separately */
+
+/* Main QChat container */
+.qChat {
+    overflow: hidden;
+    padding: 1em;
+    /* Fallback color, then CSS variable if defined */
+    color: #323130;
+    color: var(--bodyText, #323130);
+    width: 100%
+  }
+  
+  /* QChat in "teams" mode */
+  .qChat.teams {
+    /* Replacing SCSS variable with a normal font stack */
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  
+  /* Centered welcome text */
+  .welcome {
+    text-align: center;
+  }
+  
+  /* Welcome image sizing */
+  .welcomeImage {
+    width: 100%;
+    max-width: 420px;
+  }
+  
+  /* Links inside .links */
+  .links a {
+    text-decoration: none;
+    color: #03787c;
+    color: var(--link, #03787c); /* fallback then CSS variable */
+  }
+  
+  /* Hover state for links */
+  .links a:hover {
+    text-decoration: underline;
+    color: #014446;
+    color: var(--linkHovered, #014446);
+  }
+  
+  /* Main chat area background using Quinnipiac image */
+  .chatMain {
+    /* increased transparency: lower overlay alpha so background shows through more */
+    background-image: linear-gradient(
+        rgba(255, 255, 255, 0.6),
+        rgba(255, 255, 255, 0.6)
+      ),
+      url('../assets/Quinnipiac_University-442438439.png');
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    padding: 18px;
+    border-radius: 8px;
+  }
+
+  .tmImg{
+    margin-bottom: 20px;
+    margin-left: -10px;
+  }
+
+  .bobcatImage{
+    margin-left: 1000px;
+  }
+  
