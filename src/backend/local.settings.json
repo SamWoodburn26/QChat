@@ -6,8 +6,12 @@
       "MONGODB_URI": "mongodb+srv://tbturhan_db_user:Water22!0309@qu-chatbot-cluster.3qcj0xg.mongodb.net/?retryWrites=true&w=majority&appName=qu-chatbot-cluster",
       "OLLAMA_URL": "http://localhost:11434",
       "OLLAMA_MODEL": "mistral",
+      "OLLAMA_EMBED_MODEL": "nomic-embed-text",
+      "KMP_DUPLICATE_LIB_OK": "TRUE",
+      "OMP_NUM_THREADS": "1",
       "QCHAT_URLS_PATH": "qu_docs.txt",
-      "DB_NAME": "chatbot_db"
+      "DB_NAME": "chatbot_db",
+      "QCHAT_DISABLE_DB": "false"
     },
   "Host": { "CORS": "*" }
 }
