@@ -1,4 +1,10 @@
-
+import os
+# Mitigate OpenMP runtime conflicts (faiss/LLVM vs Intel MKL)
+# Must be set BEFORE importing libraries that may initialize OpenMP
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")   # allow duplicate OpenMP runtimes (unsafe but pragmatic)
+os.environ.setdefault("OMP_NUM_THREADS", "1")            # keep threads low in constrained envs
+os.environ.setdefault("MKL_THREADING_LAYER", "SEQUENTIAL")
+ 
 # ollama to make the gemma model
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
@@ -28,6 +34,7 @@ DATABASE_NAME = os.environ.get('DB_NAME', 'qchat')
 CHAT_LOGS_COLLECTION = 'chatLogs'
 # Allow turning off DB logging entirely via env
 QCHAT_LOG_CHATS = (os.getenv('QCHAT_LOG_CHATS', 'true').lower() == 'true')
+QCHAT_DISABLE_DB = (os.getenv('QCHAT_DISABLE_DB', 'false').lower() == 'true')
 # greetings to aviod rag answering
 GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
 
@@ -49,7 +56,7 @@ def _init_db_once():
     _db_checked = True
     _db_ready = False
     _db_error = None
-    if not (QCHAT_LOG_CHATS and MONGO_URI):
+    if QCHAT_DISABLE_DB or not (QCHAT_LOG_CHATS and MONGO_URI):
         return
     try:
         mongo_kwargs = {
@@ -68,7 +75,6 @@ def _init_db_once():
         db = mongo_client[DATABASE_NAME]
         _db_ready = True
     except Exception as e:
-        print("Mongo one-time init failed:", repr(e))
         mongo_client = None
         db = None
         _db_ready = False
@@ -104,7 +110,7 @@ llm = ChatOllama(
 
 # for ollama llm model and embeddings
 #llm = ChatOllama(model="mistral:latest", base_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
-embeddings = OllamaEmbeddings(model="nomic-embed-text");
+embeddings = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"));
 
 # prompt to only use given context
 prompt_template = ChatPromptTemplate.from_messages([
@@ -283,7 +289,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     # One-time DB connectivity check and optional logging
     _init_db_once()
-    if _db_ready and db is not None:
+    if (not QCHAT_DISABLE_DB) and _db_ready and db is not None:
         try:
             db[CHAT_LOGS_COLLECTION].insert_one({
                 "userId": user_id,
@@ -292,9 +298,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "reply": reply,
                 "ts": datetime.utcnow(),
             })
-        except Exception as e:
-            # Do not attempt to re-initialize; skip logging silently after first failure
-            print("Mongo insert error:", repr(e))
+        except Exception:
+            # Skip logging silently on any error
+            pass
 
     return response
 

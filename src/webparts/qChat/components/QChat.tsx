@@ -75,14 +75,15 @@ export default function QChat() {
       // const assistantText = data.response ?? '(no reply)';
       // const assistant: Msg = {role: 'assistant', text: assistantText};
       const data = await result.json();
-      const reply = data.reply || '(no reply)';
-      const sources: string[] = Array.isArray(data.sources) ? data.sources : [];
+      console.debug('LLM response', data);
+      const reply = (data && typeof data.reply === 'string') ? data.reply : '(no reply)';
+      const sources: string[] = Array.isArray(data?.sources) ? data.sources : [];
 
       let text = reply;
       if (sources.length > 0) {
         const top_two = sources.slice(0,2);
-        const links = top_two.map(src => '.[${src}](${src}){target="_blank"}').join("\n");
-        text += '\n\n Sources: \n{links}';
+        const links = top_two.map(src => `- ${src}`).join("\n");
+        text += `\n\nSources:\n${links}`;
       }
 
       const assistant: Msg = { role: 'assistant', text };
