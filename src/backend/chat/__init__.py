@@ -34,7 +34,6 @@ DATABASE_NAME = os.environ.get('DB_NAME', 'qchat')
 CHAT_LOGS_COLLECTION = 'chatLogs'
 # Allow turning off DB logging entirely via env
 QCHAT_LOG_CHATS = (os.getenv('QCHAT_LOG_CHATS', 'true').lower() == 'true')
-QCHAT_DISABLE_DB = (os.getenv('QCHAT_DISABLE_DB', 'false').lower() == 'true')
 # greetings to aviod rag answering
 GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
 
@@ -56,7 +55,7 @@ def _init_db_once():
     _db_checked = True
     _db_ready = False
     _db_error = None
-    if QCHAT_DISABLE_DB or not (QCHAT_LOG_CHATS and MONGO_URI):
+    if not (QCHAT_LOG_CHATS and MONGO_URI):
         return
     try:
         mongo_kwargs = {
@@ -75,6 +74,7 @@ def _init_db_once():
         db = mongo_client[DATABASE_NAME]
         _db_ready = True
     except Exception as e:
+        print("Mongo one-time init failed:", repr(e))
         mongo_client = None
         db = None
         _db_ready = False
@@ -289,7 +289,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     # One-time DB connectivity check and optional logging
     _init_db_once()
-    if (not QCHAT_DISABLE_DB) and _db_ready and db is not None:
+    if _db_ready and db is not None:
         try:
             db[CHAT_LOGS_COLLECTION].insert_one({
                 "userId": user_id,
@@ -298,9 +298,9 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "reply": reply,
                 "ts": datetime.utcnow(),
             })
-        except Exception:
-            # Skip logging silently on any error
-            pass
+        except Exception as e:
+            # Do not attempt to re-initialize; skip logging silently after first failure
+            print("Mongo insert error:", repr(e))
 
     return response
 

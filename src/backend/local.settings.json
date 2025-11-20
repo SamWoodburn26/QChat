@@ -10,8 +10,7 @@
       "KMP_DUPLICATE_LIB_OK": "TRUE",
       "OMP_NUM_THREADS": "1",
       "QCHAT_URLS_PATH": "qu_docs.txt",
-      "DB_NAME": "chatbot_db",
-      "QCHAT_DISABLE_DB": "false"
+      "DB_NAME": "chatbot_db"
     },
   "Host": { "CORS": "*" }
 }
