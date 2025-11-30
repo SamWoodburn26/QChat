@@ -1,171 +1,148 @@
-from pathlib import Path
-import time
-from typing import List
-import bs4
-from langchain_ollama import OllamaEmbeddings
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_community.document_loaders import WebBaseLoader
-from langchain_core.documents import Document
-from langchain_community.vectorstores import FAISS
 
+from langchain_core.prompts import ChatPromptTemplate
+import os
+import re
+from bs4 import BeautifulSoup
+from langchain_ollama import ChatOllama, OllamaEmbeddings
+import requests
+from .profanity_filter import sanitize_text
 
-# === CONFIG ===
-BATCH_SIZE = 50
-SLEEP_BETWEEN_BATCHES = 0.2
-# === END CONFIG ===
-
-
-def resolve_path(relative_path: str)-> Path:
-    return Path(__file__).parent / relative_path
-
-# read in all urls 
-def read_urls(txt_path: str) -> List[str]:
-    # get file path
-    file_path = resolve_path(txt_path)
-
-    # if file doesn't exist
-    if not file_path.exists():
-        raise FileNotFoundError(f"URL not found: {file_path}")
-    
-    # get array of all urls
-    urls = []
-    with open(file_path, "r", encoding="utf-8") as f:
-        for line in f:
-            url = line.strip()
-            if not url or not url.startswith(("http://", "https://")):
-                continue
-            urls.append(url)
-
-    #preserve order
-    seen = set()
-    out = []
-    for u in urls:
-        if u not in seen:
-            out.append(u)
-            seen.add(u)
-    return out
-
-
-# get urls and return clean readable text of the entire page
-def scrape_text(url: str) -> str:
-    # try to load the full page with mno filtering using langchain web base loader
+# greetings to aviod rag answering
+GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
+# reading qu doc
+QU_DOCS_PATH = os.path.join(os.path.dirname(__file__), "qu_docs.txt")
+# llm
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")
+_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
+_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "256"))
+def _preload_model():
     try:
-        loader = WebBaseLoader(web_paths=(url,))
-        docs = loader.load()
-        # catch for empty page, docs not read
-        if not docs or not docs[0].page_content.strip():
-            print(f"  Empty page: {url}")
-            return ""
+        # Preload and keep the model warm to reduce first-token latency
+        requests.post(
+            f"{OLLAMA_URL}/api/chat",
+            json={"model": OLLAMA_MODEL, "messages": [], "keep_alive": -1},
+            timeout=2,
+        )
+    except Exception:
+        pass
 
-        # parse with beautiful soup
-        soup = bs4.BeautifulSoup(docs[0].page_content, "html.parser")
+_preload_model()
 
-        # remove unwanted elements from the doc
-        for selector in [
-            "script", "style", "nav", "footer", "aside", 
-            "header", "iframe", "noscript", "svg", 
-            ".advertisement", ".ad", ".sidebar", ".menu"
-        ]:
-            for tag in soup.select(selector):
-                tag.decompose()
+# LangChain LLM configured to call local Ollama (tuned for speed)
+llm = ChatOllama(
+    model=OLLAMA_MODEL,
+    base_url=OLLAMA_URL,
+    temperature=0,
+    num_ctx=_NUM_CTX,
+    model_kwargs={"num_predict": _NUM_PREDICT},
+)
 
-        # get text with newlines
-        text = soup.get_text(separator="\n", strip=True)
+# for ollama llm model and embeddings
+#llm = ChatOllama(model="mistral:latest", base_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
+embeddings = OllamaEmbeddings(model="nomic-embed-text");
 
-        # filter out very short pages (maybe not needed)
-        if len(text) < 100:
-            print(f"  Too short (<100 chars): {url}")
-            return ""
+# prompt to only use given context
+prompt_template = ChatPromptTemplate.from_messages([
+    ("system",
+     "You are QChat, a helpful assistant for Quinnipiac University.\n"
+     "Your job is to answer using ONLY the provided context.\n\n"
+     "RULES:\n"
+     "- If the answer is in the context → answer clearly and concisely.\n"
+     "- If the question is a greeting (hi, hello, hey, etc.) → respond friendly and invite a real question.\n"
+     "- If the answer is NOT in the context and NOT a greeting → say: 'I don't know. Try asking about dining, housing, athletics, or MyQ.'\n"
+     "- NEVER make up information.\n"
+     "- ALWAYS be helpful and positive.\n"),
+    ("human", "Context:\n{context}\n\nUser: {question}")
+])
 
-        # print that scraping was complete and how many characters were saved from the url
-        print(f"  Scraped {len(text)} chars from {url}")
+try:
+    with open(QU_DOCS_PATH, "r", encoding="utf-8") as f:
+        QU_DOCS_URLS = [
+            line.strip()
+            for line in f
+            if line.strip().startswith("http")
+        ]
+    print(f"QChat loaded {len(QU_DOCS_URLS)} official Quinnipiac URLs from qu_docs.txt")
+except Exception as e:
+    print(f"ERROR loading qu_docs.txt: {e}")
+    QU_DOCS_URLS = []
+# prompt template
 
-        return text
-    # exception, failed to load the url to bs4
-    except Exception as e:
-        print(f"  Failed {url}: {e}")
-        return ""
+# qu docs url
 
+def answer_with_rag(question: str) -> dict:
+    # handle greeting
+    if GREETINGS_LIST.search(question.strip()):
+        return {"reply": "Hi! I'm QChat. Ask me anything about Quinnipiac!", "sources": []}
 
-# load urls, scrape clean text, split, and index with FAISS
-def store_from_txt(txt_path: str = "qu_docs.txt") -> FAISS:
-    print(f"store_from_txt('{txt_path}')")
+    try:
+        q_lower = question.lower()
+        candidates = []
 
-    # get urls
-    urls = read_urls(txt_path)
-    # if no urls are found
-    if not urls:
-        print("No URLs found. Returning empty FAISS.")
-        embeddings = OllamaEmbeddings(model="nomic-embed-text")
-        return FAISS.from_texts(["No data"], embeddings)
+        # rank URLs from qu_docs.txt
+        for url in QU_DOCS_URLS:
+            score = 0
+            url_lower = url.lower()
+            if any(k in q_lower for k in ["menu", "dining", "eat", "food"]) and "dining" in url_lower:
+                score += 10
+            if any(k in q_lower for k in ["event", "calendar", "happening"]) and "event" in url_lower:
+                score += 10
+            if any(word in url_lower for word in q_lower.split()):
+                score += 3
+            if score > 0:
+                candidates.append((url, score))
 
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
-    index_path = resolve_path("faiss_index")
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        top_urls = [url for url, _ in candidates[:4]]
+        if not top_urls:
+            top_urls = QU_DOCS_URLS[:3]
 
-    # try to load from disk
-    if index_path.exists():
-        print(f"Loading cached FAISS index from {index_path}...")
-        # try indexing to FAISS
-        try:
-            vector_store = FAISS.load_local(str(index_path), embeddings, allow_dangerous_deserialization=True)
-            print(f"Loaded {len(vector_store.docstore._dict)} documents from cache")
-            return vector_store
-        except Exception as e:
-            print(f"Cache load failed: {e} → rebuilding...")
+        # fetch content safely
+        context = ""
+        sources = []
+        headers = {"User-Agent": "QChat-Bot/1.0"}
 
-    # building FAISS index
-    print("Building new FAISS index...")
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    all_chunks: List[Document] = []
-
-    for i in range(0, len(urls), BATCH_SIZE):
-        batch = urls[i:i + BATCH_SIZE]
-        batch_docs: List[Document] = []
-
-        print(f"  Scraping batch {i//BATCH_SIZE + 1}/{(len(urls)-1)//BATCH_SIZE + 1} ({len(batch)} URLs)")
-
-        # for each url scrape to get the content
-        for url in batch:
-            text = scrape_text(url)
-            if text:
-                batch_docs.append(Document(page_content=text, metadata={"source": url}))
-
-        if batch_docs:
-            splits = text_splitter.split_documents(batch_docs)
-            all_chunks.extend(splits)
-
-        # sleep between batches, better for servers
-        if i + BATCH_SIZE < len(urls):
-            time.sleep(SLEEP_BETWEEN_BATCHES)
-
-    # create FAISS index
-    if all_chunks:
-        print(f"Indexing {len(all_chunks)} chunks in batches...")
-    
-        BATCH_EMBED = 500  # ← Safe batch size
-        vector_store = None
-    
-        for i in range(0, len(all_chunks), BATCH_EMBED):
-            batch = all_chunks[i:i + BATCH_EMBED]
-            print(f"  Embedding batch {i//BATCH_EMBED + 1}/{(len(all_chunks)-1)//BATCH_EMBED + 1} ({len(batch)} chunks)")
-        
+        for url in top_urls:
             try:
-                if vector_store is None:
-                    vector_store = FAISS.from_documents(batch, embeddings)
-                else:
-                    vector_store.add_documents(batch)
+                r = requests.get(url, timeout=8, headers=headers)
+                if r.status_code != 200:
+                    continue
+                soup = BeautifulSoup(r.text, "html.parser")
+                text = soup.get_text(separator=" ", strip=True)
+                clean = re.sub(r"\s+", " ", text)[:5000]
+                context += f"\n\n--- From {url} ---\n{clean}"
+                sources.append(url)
             except Exception as e:
-                print(f"  Embedding failed: {e}")
-                print("  Saving partial index and stopping...")
-                break
-    
-        if vector_store:
-            vector_store.save_local(str(index_path))
-            print(f"Partial index saved to {index_path}")
-        # if not content was scraped
-        else:
-            print("No embeddings created.")
-    else:
-        print("nothing scraped")
+                print(f"Failed to fetch {url}: {e}")
+                continue  # ← Keep going!
 
-    return vector_store
+        #if no context → fallback
+        if not context.strip():
+            return {
+                "reply": "I couldn't find current info on that. Try asking about dining, events, or housing!",
+                "sources": []
+            }
+
+        # call LLM
+        try:
+            reply = llm.invoke(prompt_template.invoke({
+                "context": context,
+                "question": question
+            })).content.strip()
+            reply = sanitize_text(reply)
+        except Exception as e:
+            print("LLM error:", e)
+            reply = "I'm having trouble thinking right now."
+
+        return {
+            "reply": reply or "I don't know.",
+            "sources": sources[:2]
+        }
+
+    except Exception as e:
+        print("RAG error:", e)
+        return {
+            "reply": "Sorry, I'm having trouble right now.",
+            "sources": []  # ← ALWAYS INCLUDE
+        }

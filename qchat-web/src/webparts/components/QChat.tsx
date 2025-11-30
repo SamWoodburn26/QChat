@@ -199,7 +199,7 @@ export default function QChat() {
           </button>
         </div>
 
-        <div style={{ maxHeight: 380, overflowY: 'auto', marginTop: 12, flexDirection: "column", display: "flex" }}>
+        <div style={{ maxHeight: 380, marginTop: 12, flexDirection: "column", display: "flex" }}>
           {msgs.map((m, i) => (
             <div key={i} style={{
               background: m.role === 'assistant' ? '#f5f5f5' : '#e8f3ff',
