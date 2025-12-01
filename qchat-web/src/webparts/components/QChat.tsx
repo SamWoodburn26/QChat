@@ -6,14 +6,13 @@ import HelpBubbles from './HelpBubbles.tsx';
 import styles from './QChat.module.css';
 import TMImage from '../assets/TM.png';
 import bobcatImage from '../assets/Bobcat.png';
+import localSettings from '../../backend/local.settings.json';
 
 type Msg = { role: 'user' | 'assistant'; text: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
 
-// local host for the llm- connects to backend
-//const llm_base = 'http://localhost:7071';
-const llm_base = 'https://ropier-subtetanical-isla.ngrok-free.dev';
-//const llm_base = 'https://subcollegiate-jaelynn-punningly.ngrok-free.dev';
+// Read LLM base URL from local.settings.json
+const llm_base = localSettings.Values.OLLAMA_URL || 'http://localhost:7071';
 
 export default function QChat() {
   // Visible messages in the active conversation (or in-progress messages before save)
