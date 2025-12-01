@@ -1,4 +1,10 @@
-
+import os
+# Mitigate OpenMP runtime conflicts (faiss/LLVM vs Intel MKL)
+# Must be set BEFORE importing libraries that may initialize OpenMP
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")   # allow duplicate OpenMP runtimes (unsafe but pragmatic)
+os.environ.setdefault("OMP_NUM_THREADS", "1")            # keep threads low in constrained envs
+os.environ.setdefault("MKL_THREADING_LAYER", "SEQUENTIAL")
+ 
 # ollama to make the gemma model
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
@@ -104,7 +110,7 @@ llm = ChatOllama(
 
 # for ollama llm model and embeddings
 #llm = ChatOllama(model="mistral:latest", base_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
-embeddings = OllamaEmbeddings(model="nomic-embed-text");
+embeddings = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"));
 
 # prompt to only use given context
 prompt_template = ChatPromptTemplate.from_messages([
