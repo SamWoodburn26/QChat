@@ -1,3 +1,8 @@
+import os
+# Ensure OpenMP duplicate runtime is tolerated when FAISS (LLVM OMP) mixes with MKL-dependent libs
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("MKL_THREADING_LAYER", "SEQUENTIAL")
 from pathlib import Path
 import time
 from typing import List
@@ -96,10 +101,10 @@ def store_from_txt(txt_path: str = "qu_docs.txt") -> FAISS:
     # if no urls are found
     if not urls:
         print("No URLs found. Returning empty FAISS.")
-        embeddings = OllamaEmbeddings(model="nomic-embed-text")
+        embeddings = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
         return FAISS.from_texts(["No data"], embeddings)
 
-    embeddings = OllamaEmbeddings(model="nomic-embed-text")
+    embeddings = OllamaEmbeddings(model=os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text"))
     index_path = resolve_path("faiss_index")
 
     # try to load from disk
