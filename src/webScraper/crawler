@@ -1,9 +1,0 @@
-from bs4 import BeautifulSoup
-import requests
-
-url = "https://Grad.qu.edu"
-req = requests.get(url)
-
-soup = BeautifulSoup(req.content, "html.parser")
-
-print(soup.title)
