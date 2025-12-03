@@ -10,3 +10,6 @@ requests
 pymongo 
 certifi
 python-dotenv
+beautifulsoup4==4.12.3
+langchain-ollama==0.1.2
+requests==2.32.3
