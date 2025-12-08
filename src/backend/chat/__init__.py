@@ -132,7 +132,10 @@ _vector_store = None
 def get_vector_store():
     global _vector_store
     if _vector_store is None:
+        print("⚙️ Loading RAG vector store (first time)...")
+        from .RAG import store_from_txt  
         _vector_store = store_from_txt("qu_docs.txt")
+        print("RAG vector store loaded.")
     return _vector_store
 
 
@@ -211,6 +214,59 @@ def sanitize_text(text: str) -> str:
         return text
     return _PROFANITY_REGEX.sub("****", text or "")
 
+# New FAQ Functions
+
+def search_faq(query):
+    """Search FAQ database"""
+    _init_db_once()
+    if not _db_ready:
+        return []
+    
+    try:
+        all_faqs = list(db['universityInfo'].find())
+        if not all_faqs:
+            print("No FAQs in database")
+            return []
+        
+        print(f"Found {len(all_faqs)} FAQs in database")
+        
+        query_lower = query.lower().strip()
+        scored_faqs = []
+        
+        for faq in all_faqs:
+            question = faq.get('question', '').lower()
+            
+            # Simple exact match check
+            if query_lower == question:
+                score = 1000
+                scored_faqs.append((score, faq))
+                print(f" EXACT MATCH: {faq.get('question')} → Score: {score}")
+                break  # Found exact match, stop searching
+            
+            # Partial match
+            if query_lower in question or question in query_lower:
+                score = 500
+                scored_faqs.append((score, faq))
+                print(f" Partial match: {faq.get('question')[:50]}... → Score: {score}")
+        
+        if not scored_faqs:
+            print(" No matches found")
+            return []
+        
+        scored_faqs.sort(reverse=True, key=lambda x: x[0])
+        best_score, best_faq = scored_faqs[0]
+        
+        print(f" Best match: {best_faq.get('question')} (Score: {best_score})")
+        
+        return [{'score': best_score, 'faq': best_faq}]
+        
+    except Exception as e:
+        print(f" FAQ search error: {e}")
+        import traceback
+        traceback.print_exc()
+        return []
+
+
 # answer using rag
 def answer_with_rag(question:str) -> dict:
      # manage answering hi
@@ -219,6 +275,19 @@ def answer_with_rag(question:str) -> dict:
             "reply": "Hi! I'm QChat.  Ask me anything about Quinnipiac University!",
             "sources": []
         }
+    # New try FAQ search first 
+    print(f"🔍 Searching FAQ for: {question}")
+    faq_results = search_faq(question)
+    
+    if faq_results and faq_results[0]['score'] >= 100:
+        faq = faq_results[0]['faq']
+        print(f"FAQ FOUND (score: {faq_results[0]['score']})")
+        return {
+            "reply": faq.get('answer', ''),
+            "sources": [f"FAQ: {faq.get('question')}"]
+        }
+    
+    print(" Using RAG...")
     vector_store = get_vector_store()
     docs = vector_store.similarity_search(question, k=4)
     ctx = "\n\n".join(d.page_content for d in docs)
@@ -235,6 +304,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         return response
+    print("=" * 50)
     print("main called")
     try:
         body = req.get_json()
@@ -303,4 +373,3 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             print("Mongo insert error:", repr(e))
 
     return response
-
