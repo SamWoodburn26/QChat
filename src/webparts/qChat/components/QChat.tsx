@@ -9,10 +9,10 @@ type Msg = { role: 'user' | 'assistant'; text: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
 
 // local host for the llm- connects to backend
-//const llm_base = 'http://localhost:7071';
+const llm_base = 'http://localhost:7071';
 //const llm_base = 'https://ropier-subtetanical-isla.ngrok-free.dev';
 //const llm_base = 'https://subcollegiate-jaelynn-punningly.ngrok-free.dev';
-const llm_base="https://overweak-elliot-flaringly.ngrok-free.dev";
+//const llm_base="https://overweak-elliot-flaringly.ngrok-free.dev";
 
 export default function QChat() {
   // Visible messages in the active conversation (or in-progress messages before save)

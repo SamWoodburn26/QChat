@@ -4,7 +4,7 @@ import dotenv from "dotenv";
 // Load environment variables from .env file
 dotenv.config({ debug: true });
 
-const uri = process.env.MONGO_URI;
+const uri = "mongodb://127.0.0.1:27017";
 //It s create MongoClient but its not connected yet network 
 //because i did not call client.connect() yet
 const client = new MongoClient(uri);
