@@ -116,3 +116,77 @@
 .toggleBtn:hover {
   color: #0063b1;
 }
+
+.microsoftBtn {
+  width: 100%;
+  padding: 10px;
+  background: white;
+  color: #5E5E5E;
+  border: 1px solid #8C8C8C;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.microsoftBtn:hover {
+  background: #f3f2f1;
+}
+
+.googleBtn {
+  width: 100%;
+  padding: 10px;
+  background: white;
+  color: #3c4043;
+  border: 1px solid #dadce0;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.googleBtn:hover {
+  background: #f8f9fa;
+  border-color: #d2e3fc;
+}
+
+.divider {
+  text-align: center;
+  margin: 16px 0;
+  position: relative;
+}
+
+.divider::before,
+.divider::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  width: 40%;
+  height: 1px;
+  background: #ddd;
+}
+
+.divider::before {
+  left: 0;
+}
+
+.divider::after {
+  right: 0;
+}
+
+.divider span {
+  background: white;
+  padding: 0 10px;
+  color: #999;
+  font-size: 12px;
+}

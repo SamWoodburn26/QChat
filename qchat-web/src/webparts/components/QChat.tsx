@@ -250,6 +250,120 @@ export default function QChat() {
     setLoginOpen(false);
   }
 
+  function handleMicrosoftLogin() {
+    // Microsoft OAuth configuration
+    const clientId = 'YOUR_MICROSOFT_CLIENT_ID'; // Replace with your Azure AD app client ID
+    const redirectUri = encodeURIComponent(window.location.origin);
+    const scope = encodeURIComponent('openid profile email');
+    const responseType = 'id_token';
+    const nonce = Math.random().toString(36).substring(2);
+    
+    const authUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?` +
+      `client_id=${clientId}` +
+      `&response_type=${responseType}` +
+      `&redirect_uri=${redirectUri}` +
+      `&scope=${scope}` +
+      `&response_mode=fragment` +
+      `&nonce=${nonce}`;
+    
+    // Open popup for Microsoft login
+    const popup = window.open(authUrl, 'Microsoft Login', 'width=500,height=600');
+    
+    // Listen for the redirect callback
+    window.addEventListener('message', async (event) => {
+      if (event.origin !== window.location.origin) return;
+      
+      if (event.data.type === 'microsoft-login') {
+        popup?.close();
+        
+        const { email, name } = event.data;
+        
+        try {
+          const response = await fetch(`${llm_base}/api/auth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'microsoft_login',
+              username: email,
+              name: name
+            })
+          });
+
+          const data = await response.json();
+          
+          if (data.success) {
+            setCurrentUser(name || email);
+            await loadConversationsFromDb(email);
+            setLoginOpen(false);
+          } else {
+            alert(data.error || 'Microsoft login failed');
+          }
+        } catch (err) {
+          console.error('Microsoft login error:', err);
+          alert('Microsoft login failed. Please try again.');
+        }
+      }
+    });
+  }
+
+  function handleGoogleLogin() {
+    // Google OAuth configuration
+    const clientId = '590552919397-6bp7ppthi11rgoiiehrj0jvi0apf3ltm.apps.googleusercontent.com';
+    const redirectUri = encodeURIComponent(window.location.origin + '/google-callback.html');
+    const scope = encodeURIComponent('openid profile email');
+    const responseType = 'id_token';
+    const nonce = Math.random().toString(36).substring(2);
+    
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+      `client_id=${clientId}` +
+      `&response_type=${responseType}` +
+      `&redirect_uri=${redirectUri}` +
+      `&scope=${scope}` +
+      `&nonce=${nonce}`;
+    
+    // Open popup for Google login
+    const popup = window.open(authUrl, 'Google Login', 'width=500,height=600');
+    
+    // Listen for the redirect callback
+    const messageHandler = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      
+      if (event.data.type === 'google-login') {
+        popup?.close();
+        window.removeEventListener('message', messageHandler);
+        
+        const { email, name } = event.data;
+        
+        try {
+          const response = await fetch(`${llm_base}/api/auth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'google_login',
+              username: email,
+              name: name
+            })
+          });
+
+          const data = await response.json();
+          
+          if (data.success) {
+            setCurrentUser(name || email);
+            await loadConversationsFromDb(email);
+            setLoginOpen(false);
+          } else {
+            alert(data.error || 'Google login failed');
+          }
+        } catch (err) {
+          console.error('Google login error:', err);
+          alert('Google login failed. Please try again.');
+        }
+      }
+    };
+    
+    window.addEventListener('message', messageHandler);
+  }
+
   if (showPage) {
     return <QPage onClose={() => setShowPage(false)} />;
   }
@@ -271,6 +385,8 @@ export default function QChat() {
         currentUser={currentUser}
         onLogin={handleLogin}
         onRegister={handleRegister}
+        onMicrosoftLogin={handleMicrosoftLogin}
+        onGoogleLogin={handleGoogleLogin}
         onLogout={handleLogout}
       />
       <div style={{

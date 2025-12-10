@@ -65,14 +65,25 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     username = body.get("username", "").strip()
     password = body.get("password", "").strip()
 
-    if not username or not password:
-        response = func.HttpResponse(
-            json.dumps({"error": "Username and password required"}),
-            status_code=400,
-            mimetype="application/json"
-        )
-        response.headers["Access-Control-Allow-Origin"] = "*"
-        return response
+    # Only require password for login/register actions, not OAuth
+    if action in ["login", "register"]:
+        if not username or not password:
+            response = func.HttpResponse(
+                json.dumps({"error": "Username and password required"}),
+                status_code=400,
+                mimetype="application/json"
+            )
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
+    elif action in ["microsoft_login", "google_login"]:
+        if not username:
+            response = func.HttpResponse(
+                json.dumps({"error": "Username required"}),
+                status_code=400,
+                mimetype="application/json"
+            )
+            response.headers["Access-Control-Allow-Origin"] = "*"
+            return response
 
     _init_db()
 
@@ -131,10 +142,71 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     "username": username,
                     "message": "Registration successful"
                 }
+        
+        elif action == "microsoft_login":
+            # Microsoft OAuth login - no password needed
+            name = body.get("name", username)
+            
+            # Check if user exists
+            existing = users_collection.find_one({"username": username})
+            
+            if existing:
+                # Update last login
+                users_collection.update_one(
+                    {"username": username},
+                    {"$set": {"lastLogin": datetime.utcnow()}}
+                )
+            else:
+                # Create new user for Microsoft account (no password)
+                users_collection.insert_one({
+                    "username": username,
+                    "name": name,
+                    "authProvider": "microsoft",
+                    "createdAt": datetime.utcnow(),
+                    "lastLogin": datetime.utcnow()
+                })
+            
+            result = {
+                "success": True,
+                "username": username,
+                "name": name,
+                "message": "Microsoft login successful"
+            }
+        
+        elif action == "google_login":
+            # Google OAuth login - no password needed
+            name = body.get("name", username)
+            
+            # Check if user exists
+            existing = users_collection.find_one({"username": username})
+            
+            if existing:
+                # Update last login
+                users_collection.update_one(
+                    {"username": username},
+                    {"$set": {"lastLogin": datetime.utcnow()}}
+                )
+            else:
+                # Create new user for Google account (no password)
+                users_collection.insert_one({
+                    "username": username,
+                    "name": name,
+                    "authProvider": "google",
+                    "createdAt": datetime.utcnow(),
+                    "lastLogin": datetime.utcnow()
+                })
+            
+            result = {
+                "success": True,
+                "username": username,
+                "name": name,
+                "message": "Google login successful"
+            }
+        
         else:
             result = {
                 "success": False,
-                "error": "Invalid action. Use 'login' or 'register'"
+                "error": "Invalid action. Use 'login', 'register', 'microsoft_login', or 'google_login'"
             }
 
     except Exception as e:

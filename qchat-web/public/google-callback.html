@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Google Login</title>
+</head>
+<body>
+  <script>
+    // Parse the ID token from the URL fragment
+    const hash = window.location.hash.substring(1);
+    const params = new URLSearchParams(hash);
+    const idToken = params.get('id_token');
+    
+    if (idToken) {
+      // Decode the JWT token (simplified - just parse the payload)
+      const parts = idToken.split('.');
+      if (parts.length === 3) {
+        const payload = JSON.parse(atob(parts[1]));
+        
+        // Send the user info back to the parent window
+        if (window.opener) {
+          window.opener.postMessage({
+            type: 'google-login',
+            email: payload.email,
+            name: payload.name
+          }, window.location.origin);
+          window.close();
+        }
+      }
+    }
+  </script>
+  <p>Processing Google login...</p>
+</body>
+</html>
