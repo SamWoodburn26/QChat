@@ -5,8 +5,8 @@
       "FUNCTIONS_WORKER_RUNTIME": "python",
       "MONGODB_URI": "mongodb+srv://tbturhan_db_user:Water22!0309@qu-chatbot-cluster.3qcj0xg.mongodb.net/?retryWrites=true&w=majority&appName=qu-chatbot-cluster",
       "OLLAMA_URL": "http://localhost:11434",
-      "SERVER_URL": "https://subcollegiate-jaelynn-punningly.ngrok-free.dev",
-      "OLLAMA_MODEL": "mistral",
+      "SERVER_URL": "http://localhost:7071",
+      "OLLAMA_MODEL": "mistral:latest",
       "QCHAT_URLS_PATH": "qu_docs.txt",
       "DB_NAME": "chatbot_db"
     },
