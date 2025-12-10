@@ -4,7 +4,7 @@ langchain
 langchain-core
 langchain-ollama
 bs4
-faiss-cpu==1.8.0
+faiss-cpu>=1.9.0
 httpx
 requests
 pymongo 

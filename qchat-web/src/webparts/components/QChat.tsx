@@ -3,18 +3,30 @@ import QPage from './QPage.tsx';
 import ChatHistoryPanel from './ChatHistoryPanel.tsx';
 import HelpTab from './HelpTab.tsx';
 import HelpBubbles from './HelpBubbles.tsx';
+import LoginDropdown from './LoginDropdown.tsx';
 import styles from './QChat.module.css';
 import TMImage from '../assets/TM.png';
 import bobcatImage from '../assets/Bobcat.png';
-import localSettings from '../../backend/local.settings.json';
 
 type Msg = { role: 'user' | 'assistant'; text: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
 
 // Read LLM base URL from local.settings.json
-const llm_base = localSettings.Values.OLLAMA_URL || 'http://localhost:7071';
+//const llm_base = localSettings.Values.OLLAMA_URL || 'http://localhost:7071';
+const llm_base = 'http://localhost:7071';
 
 export default function QChat() {
+  // Add error boundary
+  const [hasError, setHasError] = React.useState(false);
+  
+  React.useEffect(() => {
+    console.log('QChat component mounted');
+  }, []);
+
+  if (hasError) {
+    return <div style={{ padding: 20, color: 'red' }}>Error loading QChat</div>;
+  }
+
   // Visible messages in the active conversation (or in-progress messages before save)
   const [msgs, setMsgs] = React.useState<Msg[]>([
     { role: 'assistant', text: 'Hi! Ask me about MyQ resources.' }
@@ -25,13 +37,12 @@ export default function QChat() {
   const [showHelpTab, setShowHelpTab] = React.useState(false);
   const [showTips, setShowTips] = React.useState(true);
   const [historyOpen, setHistoryOpen] = React.useState(false);
+  const [loginOpen, setLoginOpen] = React.useState(false);
 
-  // Generate persistent user id (in-memory, no localStorage)
-  const [userId] = React.useState<string>(() => {
-    return 'user_' + Date.now().toString(36) + Math.random().toString(36).substring(2);
-  });
+  // Login state: no localStorage, managed via MongoDB
+  const [currentUser, setCurrentUser] = React.useState<string | null>(null);
 
-  // Keep conversations in memory only (no localStorage)
+  // Keep conversations in state, loaded from MongoDB
   const [history, setHistory] = React.useState<Conversation[]>([]);
 
   // current conversation id (null = in-progress new conversation)
@@ -65,7 +76,7 @@ export default function QChat() {
       const result = await fetch(`${llm_base}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'chat', userId, sessionId, message: msg }),
+        body: JSON.stringify({ action: 'chat', userId: currentUser || 'anonymous', sessionId, message: msg }),
       });
 
       if (!result.ok) {
@@ -89,20 +100,26 @@ export default function QChat() {
       const assistant: Msg = { role: 'assistant', text };
       setMsgs(m => [...m, assistant]);
 
-      // Persist conversation state to history (in-memory only)
+      // Persist conversation state to history
       if (!currentConvId) {
         // First user message in a new conversation -> create a new Conversation object.
         const title = user.text.slice(0, 60);
         const conv: Conversation = {
           id: sessionId,
           title,
-          messages: [...msgs, user, assistant],
+          messages: [{ role: 'assistant', text: 'Hi! Ask me about MyQ resources.' }, user, assistant],
           created: new Date().toISOString()
         };
 
         // Prepend to history (newest first) and cap to 50 items
         const newHist = [conv, ...history].slice(0, 50);
         setHistory(newHist);
+        // Save to MongoDB for current user
+        if (currentUser) {
+          await saveConversationToDb(currentUser, conv);
+        }
+        // Update current conversation ID so future messages append to this conversation
+        setCurrentConvId(sessionId);
       } else {
         // Append to an existing conversation object in history
         const updated = history.map(h =>
@@ -111,6 +128,13 @@ export default function QChat() {
             : h
         );
         setHistory(updated);
+        // Save to MongoDB for current user
+        if (currentUser) {
+          const updatedConv = updated.find(h => h.id === sessionId);
+          if (updatedConv) {
+            await saveConversationToDb(currentUser, updatedConv);
+          }
+        }
       }
 
     } catch (err) {
@@ -126,6 +150,220 @@ export default function QChat() {
     setCurrentConvId(conv.id);
   }
 
+  // Helper function to save conversation to MongoDB
+  async function saveConversationToDb(username: string, conversation: Conversation) {
+    try {
+      await fetch(`${llm_base}/api/history`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'save',
+          username,
+          conversation
+        })
+      });
+    } catch (err) {
+      console.error('Failed to save conversation:', err);
+    }
+  }
+
+  // Helper function to load conversations from MongoDB
+  async function loadConversationsFromDb(username: string) {
+    try {
+      const response = await fetch(`${llm_base}/api/history?username=${encodeURIComponent(username)}`);
+      if (response.ok) {
+        const data = await response.json();
+        setHistory(data.conversations || []);
+      }
+    } catch (err) {
+      console.error('Failed to load conversations:', err);
+    }
+  }
+
+  // Login handlers
+  async function handleLogin(username: string, password: string) {
+    try {
+      const response = await fetch(`${llm_base}/api/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'login',
+          username,
+          password
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        setCurrentUser(username);
+        // Load this user's chat history from MongoDB
+        await loadConversationsFromDb(username);
+        setLoginOpen(false);
+      } else {
+        alert(data.error || 'Login failed');
+      }
+    } catch (err) {
+      console.error('Login error:', err);
+      alert('Login failed. Please try again.');
+    }
+  }
+
+  async function handleRegister(username: string, password: string) {
+    try {
+      const response = await fetch(`${llm_base}/api/auth`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'register',
+          username,
+          password
+        })
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        // Auto-login after successful registration
+        setCurrentUser(username);
+        await loadConversationsFromDb(username);
+        setLoginOpen(false);
+      } else {
+        alert(data.error || 'Registration failed');
+      }
+    } catch (err) {
+      console.error('Registration error:', err);
+      alert('Registration failed. Please try again.');
+    }
+  }
+
+  function handleLogout() {
+    setCurrentUser(null);
+    
+    // Clear history from view
+    setHistory([]);
+    
+    // Reset current conversation
+    setCurrentConvId(null);
+    setMsgs([{ role: 'assistant', text: 'Hi! Ask me about MyQ resources.' }]);
+    
+    setLoginOpen(false);
+  }
+
+  function handleMicrosoftLogin() {
+    // Microsoft OAuth configuration
+    const clientId = 'YOUR_MICROSOFT_CLIENT_ID'; // Replace with your Azure AD app client ID
+    const redirectUri = encodeURIComponent(window.location.origin);
+    const scope = encodeURIComponent('openid profile email');
+    const responseType = 'id_token';
+    const nonce = Math.random().toString(36).substring(2);
+    
+    const authUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?` +
+      `client_id=${clientId}` +
+      `&response_type=${responseType}` +
+      `&redirect_uri=${redirectUri}` +
+      `&scope=${scope}` +
+      `&response_mode=fragment` +
+      `&nonce=${nonce}`;
+    
+    // Open popup for Microsoft login
+    const popup = window.open(authUrl, 'Microsoft Login', 'width=500,height=600');
+    
+    // Listen for the redirect callback
+    window.addEventListener('message', async (event) => {
+      if (event.origin !== window.location.origin) return;
+      
+      if (event.data.type === 'microsoft-login') {
+        popup?.close();
+        
+        const { email, name } = event.data;
+        
+        try {
+          const response = await fetch(`${llm_base}/api/auth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'microsoft_login',
+              username: email,
+              name: name
+            })
+          });
+
+          const data = await response.json();
+          
+          if (data.success) {
+            setCurrentUser(name || email);
+            await loadConversationsFromDb(email);
+            setLoginOpen(false);
+          } else {
+            alert(data.error || 'Microsoft login failed');
+          }
+        } catch (err) {
+          console.error('Microsoft login error:', err);
+          alert('Microsoft login failed. Please try again.');
+        }
+      }
+    });
+  }
+
+  function handleGoogleLogin() {
+    // Google OAuth configuration
+    const clientId = '590552919397-6bp7ppthi11rgoiiehrj0jvi0apf3ltm.apps.googleusercontent.com';
+    const redirectUri = encodeURIComponent(window.location.origin + '/google-callback.html');
+    const scope = encodeURIComponent('openid profile email');
+    const responseType = 'id_token';
+    const nonce = Math.random().toString(36).substring(2);
+    
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+      `client_id=${clientId}` +
+      `&response_type=${responseType}` +
+      `&redirect_uri=${redirectUri}` +
+      `&scope=${scope}` +
+      `&nonce=${nonce}`;
+    
+    // Open popup for Google login
+    const popup = window.open(authUrl, 'Google Login', 'width=500,height=600');
+    
+    // Listen for the redirect callback
+    const messageHandler = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      
+      if (event.data.type === 'google-login') {
+        popup?.close();
+        window.removeEventListener('message', messageHandler);
+        
+        const { email, name } = event.data;
+        
+        try {
+          const response = await fetch(`${llm_base}/api/auth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'google_login',
+              username: email,
+              name: name
+            })
+          });
+
+          const data = await response.json();
+          
+          if (data.success) {
+            setCurrentUser(name || email);
+            await loadConversationsFromDb(email);
+            setLoginOpen(false);
+          } else {
+            alert(data.error || 'Google login failed');
+          }
+        } catch (err) {
+          console.error('Google login error:', err);
+          alert('Google login failed. Please try again.');
+        }
+      }
+    };
+    
+    window.addEventListener('message', messageHandler);
+  }
+
   if (showPage) {
     return <QPage onClose={() => setShowPage(false)} />;
   }
@@ -139,6 +377,17 @@ export default function QChat() {
         onClose={() => setHistoryOpen(false)}
         history={history}
         onLoad={handleLoadConversation}
+      />
+      {/* Login dropdown */}
+      <LoginDropdown
+        open={loginOpen}
+        onClose={() => setLoginOpen(false)}
+        currentUser={currentUser}
+        onLogin={handleLogin}
+        onRegister={handleRegister}
+        onMicrosoftLogin={handleMicrosoftLogin}
+        onGoogleLogin={handleGoogleLogin}
+        onLogout={handleLogout}
       />
       <div style={{
         background: '#012a5a',
@@ -170,6 +419,19 @@ export default function QChat() {
             }}
           >
             Help
+          </button>
+          <button
+            onClick={() => setLoginOpen(v => !v)}
+            style={{
+              padding: '6px 10px',
+              borderRadius: 8,
+              background: currentUser ? '#28a745' : '#0078D4',
+              color: 'white',
+              border: 'none',
+              cursor: 'pointer'
+            }}
+          >
+            {currentUser ? `👤 ${currentUser}` : '👤 Login'}
           </button>
           <img className={styles.bobcatImage} src={bobcatImage} width={100} height={100}></img>
           <div style={{ fontWeight: 700, fontSize: 34, marginLeft: -5 }}>QCHAT</div>
