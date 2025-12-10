@@ -7,13 +7,13 @@ import LoginDropdown from './LoginDropdown.tsx';
 import styles from './QChat.module.css';
 import TMImage from '../assets/TM.png';
 import bobcatImage from '../assets/Bobcat.png';
+import localSettings from '../../backend/local.settings.json';
 
 type Msg = { role: 'user' | 'assistant'; text: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
 
-// Read LLM base URL from local.settings.json
-//const llm_base = localSettings.Values.OLLAMA_URL || 'http://localhost:7071';
-const llm_base = 'http://localhost:7071';
+// Backend API base URL
+const llm_base = localSettings.Values.SERVER_URL || 'http://localhost:7071';
 
 export default function QChat() {
   // Add error boundary
