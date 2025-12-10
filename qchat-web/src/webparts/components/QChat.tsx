@@ -19,6 +19,9 @@ export default function QChat() {
   // Add error boundary
   const [hasError, setHasError] = React.useState(false);
   
+  // Ref for auto-scrolling to latest message
+  const messagesEndRef = React.useRef<HTMLDivElement>(null);
+  
   React.useEffect(() => {
     console.log('QChat component mounted');
   }, []);
@@ -31,6 +34,11 @@ export default function QChat() {
   const [msgs, setMsgs] = React.useState<Msg[]>([
     { role: 'assistant', text: 'Hi! Ask me about MyQ resources.' }
   ]);
+
+  // Auto-scroll to bottom when messages change
+  React.useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [msgs]);
 
   const [input, setInput] = React.useState('');
   const [showPage, setShowPage] = React.useState(false);
@@ -444,12 +452,15 @@ export default function QChat() {
         padding: 12,
         borderRadius: 12,
         border: '1px solid #ddd',
-        minHeight: "85dvh"
+        height: "85vh",
+        display: 'flex',
+        flexDirection: 'column'
       }}>
         <div style={{
           display: 'flex',
           justifyContent: 'space-between',
-          alignItems: 'center'
+          alignItems: 'center',
+          marginBottom: 12
         }}>
           <HelpBubbles open={showTips} />
           <button
@@ -460,7 +471,13 @@ export default function QChat() {
           </button>
         </div>
 
-        <div style={{ maxHeight: 380, marginTop: 12, flexDirection: "column", display: "flex" }}>
+        <div style={{ 
+          flex: 1, 
+          overflowY: 'auto', 
+          display: 'flex', 
+          flexDirection: 'column',
+          marginBottom: 12
+        }}>
           {msgs.map((m, i) => (
             <div key={i} style={{
               background: m.role === 'assistant' ? '#f5f5f5' : '#e8f3ff',
@@ -472,8 +489,9 @@ export default function QChat() {
               <span dangerouslySetInnerHTML={{ __html: m.text }} />
             </div>
           ))}
+          <div ref={messagesEndRef} />
         </div>
-        <form onSubmit={onSend} style={{ display: 'flex', gap: 8, marginTop: "55dvh" }}>
+        <form onSubmit={onSend} style={{ display: 'flex', gap: 8 }}>
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
