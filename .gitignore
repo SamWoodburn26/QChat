@@ -40,3 +40,4 @@ obj
 
 # local settings
 src/backend/qchatAPI/local.settings.json
+__pycache__/
