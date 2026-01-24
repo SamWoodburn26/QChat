@@ -3,6 +3,8 @@ import azure.functions as func
 import json, os
 
 from .RAG import answer_with_rag
+# FAQ matcher import
+from .faq_matcher import check_faq_by_keywords
 
 import azure.functions as func
 import json, os
@@ -16,6 +18,10 @@ DATABASE_NAME = os.environ.get('DB_NAME', 'qchat')
 CHAT_LOGS_COLLECTION = 'chatLogs'
 # Allow turning off DB logging entirely via env
 QCHAT_LOG_CHATS = (os.getenv('QCHAT_LOG_CHATS', 'true').lower() == 'true')
+
+
+#Enable FAQ priority: check FAQs before calling RAG
+QCHAT_FAQ_FIRST = (os.getenv('QCHAT_FAQ_FIRST', 'true').lower() == 'true')
 
 # MongoDB client (global)
 mongo_client = None
@@ -92,6 +98,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "loggingEnabled": QCHAT_LOG_CHATS,
             "hasMongoUri": bool(MONGO_URI),
             "error": _db_error,
+            "faqEnabled": QCHAT_FAQ_FIRST,
         }
         return func.HttpResponse(json.dumps(info), mimetype="application/json")
     elif action == "chat":
@@ -103,16 +110,41 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     if not msg:
         return func.HttpResponse('{"error":"missing message"}', status_code=400, mimetype="application/json")
 
-    try:
-        # Invoke via LCEL chain; no external context wired yet.
-        rag_result = answer_with_rag(msg)
-        reply_text = rag_result["reply"]
-        sources = rag_result["sources"]
 
-        reply  = {"reply": reply_text, "sources": sources}
+    # FAQ matcher logic + RAG fallback
+    try:
+        # First control FAQ if enabled
+        faq_result = None
+        if QCHAT_FAQ_FIRST:
+            print(f"Checking FAQ for: {msg}")
+            faq_result = check_faq_by_keywords(msg)
+        
+        # if FAQ found use it , else use RAG
+        if faq_result:
+            print(f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}")
+            reply = {
+                "reply": faq_result.get("reply"),
+                "sources": faq_result.get("sources", []),
+                "source": "faq",
+                "category": faq_result.get("category"),
+                "faqScore": faq_result.get("faqScore"),
+            }
+        else:
+            # Use RAG because no FAQ match
+            print("No FAQ match, using RAG...")
+            rag_result = answer_with_rag(msg)
+            reply = {
+                "reply": rag_result.get("reply", "I don't know."),
+                "sources": rag_result.get("sources", []),
+                "source": "rag",
+            }
     except Exception as e:
-        print("RAG error: ", repr(e))
-        reply = {"reply": "I don't know.", "sources":[]}
+        print(f"Error in FAQ/RAG processing: {repr(e)}")
+        reply = {
+            "reply": "I don't know.",
+            "sources": [],
+            "source": "error",
+        }
 
     response = func.HttpResponse(
         json.dumps(reply),
@@ -125,19 +157,24 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     # One-time DB connectivity check and optional logging
     _init_db_once()
     if _db_ready and db is not None:
-        # send message to databse
         try:
-            db[CHAT_LOGS_COLLECTION].insert_one({
+            log_doc = {
                 "userId": user_id,
                 "action": action,
                 "message": msg,
-                "reply": reply,
+                "reply": reply.get("reply"),
+                "source": reply.get("source", "unknown"),
                 "ts": datetime.utcnow(),
-            })
+            }
+            
+            # Add FAQ-specific analytics data
+            if reply.get("source") == "faq":
+                log_doc["faqCategory"] = reply.get("category")
+                log_doc["faqScore"] = reply.get("faqScore")
+            
+            db[CHAT_LOGS_COLLECTION].insert_one(log_doc)
             print("inserting to mongo")
         except Exception as e:
-            # connection to database error
             print("Mongo insert error:", repr(e))
 
     return response
-
