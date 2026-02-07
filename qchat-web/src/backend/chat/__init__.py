@@ -21,6 +21,9 @@ CHAT_LOGS_COLLECTION = 'chatLogs'
 # Allow turning off DB logging entirely via env
 QCHAT_LOG_CHATS = (os.getenv('QCHAT_LOG_CHATS', 'true').lower() == 'true')
 
+# greetings to aviod rag answering
+GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
+
 
 #Enable FAQ priority: check FAQs before calling RAG
 QCHAT_FAQ_FIRST = (os.getenv('QCHAT_FAQ_FIRST', 'true').lower() == 'true')
@@ -131,6 +134,10 @@ def format_reply(text: str) -> str:
 
 # to answer with rag
 def answer_with_rag(question: str) -> dict:
+    # handle greeting
+    if GREETINGS_LIST.search(question.strip()):
+        return {"reply": "Hi! I'm QChat. Ask me anything about Quinnipiac!", "sources": []}
+
     docs = retrieve(question, k=6)
     # failure to retrieve docs
     if not docs:

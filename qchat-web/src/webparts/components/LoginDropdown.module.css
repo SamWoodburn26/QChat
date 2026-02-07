@@ -65,7 +65,7 @@
 .loginBtn {
   width: 100%;
   padding: 10px;
-  background: #0078D4;
+  background: #FFB81C;
   color: white;
   border: none;
   border-radius: 6px;
@@ -75,7 +75,7 @@
 }
 
 .loginBtn:hover {
-  background: #0063b1;
+  background: #c38705;
 }
 
 .loggedIn {

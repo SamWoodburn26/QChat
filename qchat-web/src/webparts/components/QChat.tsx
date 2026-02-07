@@ -15,12 +15,16 @@ type Conversation = { id: string; title: string; messages: Msg[]; created: strin
 // Backend API base URL
 const llm_base = localSettings.Values.SERVER_URL || 'http://localhost:7071';
 
+
 export default function QChat() {
   // Add error boundary
   const [hasError, setHasError] = React.useState(false);
   
   // Ref for auto-scrolling to latest message
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
+
+  // for loading screen
+  const [isLoading, setIsLoading] = React.useState(false);
   
   React.useEffect(() => {
     console.log('QChat component mounted');
@@ -79,6 +83,9 @@ export default function QChat() {
       sessionId = 'session_' + Date.now().toString(36) + Math.random().toString(36).substring(2);
       setCurrentConvId(sessionId);
     }
+
+    // set is loadinh to true
+    setIsLoading(true); 
 
     try {
       const result = await fetch(`${llm_base}/api/chat`, {
@@ -150,6 +157,9 @@ export default function QChat() {
     } catch (err) {
       console.error('Chat request error', err);
       setMsgs(m => [...m, { role: 'assistant', text: "Could not access LLM. Please check if backend is running." }]);
+    }
+    finally{
+        setIsLoading(false);
     }
   }
 
@@ -379,7 +389,7 @@ export default function QChat() {
   }
 
   return (
-    <div style={{ fontFamily: 'Segoe UI, system-ui', width: "100dvw" }}>
+    <div style={{ fontFamily: 'Segoe UI, system-ui', width: "100dvw", height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {showHelpTab && <HelpTab onClose={() => setShowHelpTab(false)} />}
       {/* History panel is controlled (open/close) by this component */}
       <ChatHistoryPanel
@@ -400,54 +410,39 @@ export default function QChat() {
         onLogout={handleLogout}
       />
       <div style={{
-        background: '#012a5a',
+        background: '#0C2340',
         color: 'white',
-        padding: '12px 16px',
+        padding: '0px 14px',
         borderRadius: 6,
         display: 'flex',
-        // alignItems: 'center', 
-        height: "10dvh",
         justifyContent: 'space-between',
-        marginBottom: 12,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
           {/* Toggle history panel */}
           <button
+            className={styles.historyButton}
             onClick={() => setHistoryOpen(v => !v)}
-            style={{ padding: '6px 10px', borderRadius: 8 }}
           >
             History
           </button>
           <button
+            className={styles.helpButton}
             onClick={() => setShowHelpTab(true)}
-            style={{
-              padding: '6px 10px',
-              borderRadius: 8,
-              background: '#0a58ca',
-              color: 'white',
-              border: 'none'
-            }}
           >
             Help
           </button>
           <button
+          className={styles.loginButton}
             onClick={() => setLoginOpen(v => !v)}
-            style={{
-              padding: '6px 10px',
-              borderRadius: 8,
-              background: currentUser ? '#28a745' : '#0078D4',
-              color: 'white',
-              border: 'none',
-              cursor: 'pointer'
-            }}
           >
             {currentUser ? `👤 ${currentUser}` : '👤 Login'}
           </button>
-          <img className={styles.bobcatImage} src={bobcatImage} width={100} height={100}></img>
-          <div style={{ fontWeight: 700, fontSize: 34, marginLeft: -5 }}>QCHAT</div>
-          <img className={styles.tmImg} src={TMImage} width={15} height={15}></img>
+          <div className={styles.titleLogo}>
+            <img className={styles.bobcatImage} src={bobcatImage} width={100} height={100} alt="Bobcat mascot" />
+            <div style={{fontWeight: 700, fontSize: 34, lineHeight: 1, marginRight: 6}}>QCHAT</div>
+            <img className={styles.tmImg} src={TMImage} width={15} height={15} alt="Trademark symbol"/>
+          </div>
         </div>
-       
       </div>
 
       <div className={styles.chatMain} style={{
@@ -466,8 +461,8 @@ export default function QChat() {
         }}>
           <HelpBubbles open={showTips} />
           <button
+            className={styles.hideTipsButton}
             onClick={() => setShowTips(t => !t)}
-            style={{ padding: '6px 10px', borderRadius: 8 }}
           >
             {showTips ? 'Hide Tips' : 'Show Tips'}
           </button>
@@ -478,7 +473,7 @@ export default function QChat() {
           overflowY: 'auto', 
           display: 'flex', 
           flexDirection: 'column',
-          marginBottom: 12
+          marginBottom: 6
         }}>
           {msgs.map((m, i) => (
             <div key={i} style={{
@@ -491,28 +486,54 @@ export default function QChat() {
               <span dangerouslySetInnerHTML={{ __html: m.text }} />
             </div>
           ))}
+
+          {isLoading && (
+            <div
+              style={{
+                background: '#f5f5f5',
+                padding: 10,
+                borderRadius: 10,
+                margin: '6px 0',
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8
+              }}
+            >
+              <strong>qChat:</strong>
+              <span className={styles.spinner} />
+              <span>Thinking…</span>
+            </div>
+          )}
+
           <div ref={messagesEndRef} />
         </div>
         <form onSubmit={onSend} style={{ display: 'flex', gap: 8 }}>
           <input
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder="Type a question…"
+            placeholder= {isLoading ? "QChat is thinking..." : "Type a question…"}
+            disabled = {isLoading}
             style={{
               flex: 1,
               padding: 10,
               borderRadius: 10,
-              border: '1px solid #ccc'
+              border: '1px solid #ccc',
+              opacity: isLoading ? 0.7 : 1,
+              cursor: isLoading ? 'not-allowed' : 'text'
             }}
           />
           <button
+            className={styles.sendButton}
             type="submit"
+            disabled={isLoading}
             style={{
               padding: '10px 16px',
               borderRadius: 10,
-              border: '1px solid #0078D4',
-              background: '#0078D4',
-              color: 'white'
+              border: '1px solid #418FDE',
+              background: '#418FDE',
+              color: 'white',
+              opacity: isLoading ? 0.7 : 1,
+              cursor: isLoading ? 'not-allowed' : 'pointer'
             }}
           >
             Send
