@@ -99,10 +99,12 @@ export default function QChat() {
       const sources: string[] = Array.isArray(data.sources) ? data.sources : [];
 
       let text = reply;
+      // convert new lines to <br> for better formatting
+      text = text.replace(/\n/g, '<br>');
       if (sources.length > 0) {
         const top_two = sources.slice(0, 2);
-        const links = top_two.map(src => `<a href="${src}" target="_blank">${src}</a>`).join('<br>');
-        text += '\n\n<br> Sources: ' + links;
+        const links = top_two.map(src => `<a href="${src}" target="_blank" rel="noreferer">${src}</a>`).join('<br>');
+        text += '<br/><br/><strong>Sources:</strong><br/> ' + links;
       }
 
       const assistant: Msg = { role: 'assistant', text };

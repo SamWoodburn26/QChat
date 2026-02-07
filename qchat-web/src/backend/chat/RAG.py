@@ -1,219 +1,196 @@
 
-import random
-from urllib.parse import unquote, urlparse
-from langchain_core.prompts import ChatPromptTemplate
 import os
+import time
 import re
-from bs4 import BeautifulSoup
-from langchain_ollama import ChatOllama, OllamaEmbeddings
+from pathlib import Path
+from typing import List, Optional, Tuple
+
 import requests
-from .profanity_filter import sanitize_text
+import bs4
 
-# greetings to aviod rag answering
-GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
-# stop words and punctuation
-STOPWORDS = {"the","a","an","and","or","to","of","in","on","for","with","is","are","was","were","it","this","that","i","you","we","they","my","your","our","at","from","by","as","about","please","can","could","would","tell","me","what","when","where","how"}
-# reading qu doc
-QU_DOCS_PATH = os.path.join(os.path.dirname(__file__), "qu_docs.txt")
-# llm
-OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")
-_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
-_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "256"))
+from langchain_core.documents import Document
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from langchain_community.vectorstores import FAISS
+from langchain_ollama import OllamaEmbeddings
 
-def _preload_model():
-    try:
-        # Preload and keep the model warm to reduce first-token latency
-        requests.post(
-            f"{OLLAMA_URL}/api/chat",
-            json={"model": OLLAMA_MODEL, "messages": [], "keep_alive": -1},
-            timeout=2,
-        )
-    except Exception:
-        pass
 
-_preload_model()
+# paths
+BASE_DIR = Path(__file__).parent
+DEFAULT_URLS_TXT = BASE_DIR / "qu_docs.txt"
+DEFAULT_INDEX_DIR = BASE_DIR / "faiss_index"
 
-# get the important words/ tokenize
-def tokenize(q:str) -> list[str]:
-    q = q.lower
-    q = re.sub(r"[^a-z0-9\s]", " ", q)
-    # tokens = words not in stopwords (fillers) and length greater than 2
-    tokens = [t for t in q.split() if t and t not in STOPWORDS and len(t)>2]
-    return tokens
 
-def url_tokens(url: str) -> set[str]:
-    p = urlparse(url)
-    path = unquote(p.path.lower())
-    #split on / - _ .
-    parts = re.split(r"[\/\-_\.]+", path)
-    return {x for x in parts if x and len(x)>2}
+# config
+USER_AGENT = os.getenv("QCHAT_USER_AGENT", "QChatIndexer/1.0")
+REQUEST_TIMEOUT = float(os.getenv("QCHAT_REQUEST_TIMEOUT", "12"))
+SLEEP_EVERY_N = int(os.getenv("QCHAT_SLEEP_EVERY_N", "25"))
+SLEEP_SECONDS = float(os.getenv("QCHAT_SLEEP_SECONDS", "0.5"))
+CHUNK_SIZE = int(os.getenv("QCHAT_CHUNK_SIZE", "1000"))
+CHUNK_OVERLAP = int(os.getenv("QCHAT_CHUNK_OVERLAP", "150"))
+EMBED_MODEL = os.getenv("QCHAT_EMBED_MODEL", "nomic-embed-text")
 
-# scoring function to rank urls and break ties randomly
-def rank_urls(question: str, urls: list[str], k: int=5) -> list[str]:
-    print("ranking urls")
-    q_tokens = tokenize(question)
-    if not q_tokens:
-        return urls[:k]
-    # loop through each url and get a list of urls matching the tokens
-    scored = []
-    for url in urls:
-        u_tokens = url_tokens(url)
-        # number of keyword matches
-        hits = sum(1 for t in q_tokens if t in u_tokens)
-        if hits > 0:
-            scored.append((url, hits))
-    # if no urls are found get random (this could be improved but is better than just the first few)
-    if not scored:
-        return random.sample(urls, min(k, len(urls)))
-    # sort by hits descending, then shuffle within ties
-    scored.sort(key=lambda x: x[1], revers = True)
-    top_score = scored[0][1]
-    top_bucket = [u for u, s in scored if s == top_score]
-    rest = [u for u, s in scored if s != top_score]
-    random.shuffle(top_bucket)
-    # return
-    return (top_bucket + rest)[:k]
-        
+# If you want to reject irrelevant retrievals in chat:
+USE_SCORE_THRESHOLD = os.getenv("QCHAT_USE_SCORE_THRESHOLD", "false").lower() == "true"
+# note: faiss score meaning varies; treat this as “tunable”
+SCORE_THRESHOLD = float(os.getenv("QCHAT_SCORE_THRESHOLD", "0.9"))
 
-# LangChain LLM configured to call local Ollama (tuned for speed)
-llm = ChatOllama(
-    model=OLLAMA_MODEL,
-    base_url=OLLAMA_URL,
-    temperature=0,
-    num_ctx=_NUM_CTX,
-    model_kwargs={"num_predict": _NUM_PREDICT},
-)
+DEBUG_RETRIEVAL = os.getenv("QCHAT_DEBUG_RETRIEVAL", "false").lower() == "true"
 
-# for ollama llm model and embeddings
-#llm = ChatOllama(model="mistral:latest", base_url=os.getenv("OLLAMA_URL", "http://127.0.0.1:11434"))
-embeddings = OllamaEmbeddings(model="nomic-embed-text");
 
-# prompt to only use given context
-prompt_template = ChatPromptTemplate.from_messages([
-    ("system",
-     "You are QChat, a helpful assistant for Quinnipiac University.\n"
-     "Your job is to answer using ONLY the provided context.\n\n"
-     "RULES:\n"
-     "- If the answer is in the context → answer clearly and concisely.\n"
-     "- If the question is a greeting (hi, hello, hey, etc.) → respond friendly and invite a real question.\n"
-     "- If the answer is NOT in the context and NOT a greeting → say: 'I don't know. Try asking about dining, housing, athletics, or MyQ.'\n"
-     "- NEVER make up information.\n"
-     "- ALWAYS be helpful and positive.\n"
-     "- NEVER make up or modify the links given, provide the exact link without any adjustments.\n"
-     "- assume the student is an undergraduate living on Mount Carmel, unless otherwise told. \n"
-     "Formatting rules:\n"
-     "- Use short paragraphs\n"
-     "- Use bullet points for lists\n"
-     "- Use headings when appropriate\n"
-     "- Do NOT return one long block of text\n"
-     "- Preserve line breaks\n"
-     "- When there is a numbered list seperate each number with a new line"),
-    ("human", "Context:\n{context}\n\nUser: {question}")
-])
+def read_urls(txt_path: Path = DEFAULT_URLS_TXT) -> List[str]:
+    # read URLs from a text file, preserve order
+    if not txt_path.exists():
+        raise FileNotFoundError(f"URLs file not found: {txt_path}")
+    # all urls
+    raw = []
+    with open(txt_path, "r", encoding="utf-8") as f:
+        for line in f:
+            u = line.strip()
+            if u.startswith("http://") or u.startswith("https://"):
+                raw.append(u)
+    # ensure there are no duplicates
+    seen = set()
+    out = []
+    for u in raw:
+        if u not in seen:
+            out.append(u)
+            seen.add(u)
+    return out
 
-try:
-    with open(QU_DOCS_PATH, "r", encoding="utf-8") as f:
-        QU_DOCS_URLS = [
-            line.strip()
-            for line in f
-            if line.strip().startswith("http")
-        ]
-    print(f"QChat loaded {len(QU_DOCS_URLS)} official Quinnipiac URLs from qu_docs.txt")
-except Exception as e:
-    print(f"ERROR loading qu_docs.txt: {e}")
-    QU_DOCS_URLS = []
+# read through the url to get the text
+def _clean_html_to_text(html: str) -> str:
+    soup = bs4.BeautifulSoup(html, "html.parser")
+    # remove html elements before extracting the text
+    for tag in soup(["script", "style", "noscript"]):
+        tag.decompose()
+    # get text
+    text = soup.get_text(separator="\n", strip=True)
+    # basic whitespace cleanup (keep line breaks)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # return cleaned text
+    return text
 
-def answer_with_rag(question: str) -> dict:
-    # handle greeting
-    if GREETINGS_LIST.search(question.strip()):
-        return {"reply": "Hi! I'm QChat. Ask me anything about Quinnipiac!", "sources": []}
 
-    try:
-        '''
-        q_lower = question.lower()
-        candidates = []
+# fetch and extract visible text from usable urls, returns None if empty/unusable.
+def fetch_url_text(url: str) -> Optional[str]:
+    headers = {"User-Agent": USER_AGENT}
+    r = requests.get(url, headers=headers, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+    # if blocked or forbidden skip
+    if r.status_code != 200:
+        return None
+    # get text from the page
+    text = _clean_html_to_text(r.text)
+    # skip pages that are basically empty or likely login pages
+    if not text or len(text) < 150:
+        return None
+    # detect common sign-in page patterns
+    lower = text.lower()
+    if "sign in" in lower and "password" in lower and "microsoft" in lower:
+        # likely private SharePoint redirect / auth page
+        return None
+    # return text
+    return text
 
-        # rank URLs from qu_docs.txt
-        for url in QU_DOCS_URLS:
-            score = 0
-            url_lower = url.lower()
-            if any(k in q_lower for k in ["menu", "dining", "eat", "food"]) and "dining" in url_lower:
-                score += 10
-            if any(k in q_lower for k in ["event", "calendar", "happening"]) and "event" in url_lower:
-                score += 10
-            if any(word in url_lower for word in q_lower.split()):
-                score += 3
-            if score > 0:
-                candidates.append((url, score))
+# build faiss index and save to disk, returns num_pages_ingested and num_chunks
+def build_index(urls_txt: Path = DEFAULT_URLS_TXT, index_dir: Path = DEFAULT_INDEX_DIR, max_urls: Optional[int] = None,) -> Tuple[int, int]:
+    # get urls
+    urls = read_urls(urls_txt)
+    if max_urls is not None:
+        urls = urls[:max_urls]
 
-        candidates.sort(key=lambda x: x[1], reverse=True)
-        '''
-        #top_urls = [url for url, _ in candidates[:4]]
-        top_urls = rank_urls(question, QU_DOCS_URLS, k=5)
-
-        for url in top_urls:
-            print(url)
-
-        # fetch content safely
-        context = ""
-        sources = []
-        headers = {"User-Agent": "QChat-Bot/1.0"}
-
-        for url in top_urls:
-            try:
-                r = requests.get(url, timeout=8, headers=headers)
-                if r.status_code != 200:
-                    continue
-                soup = BeautifulSoup(r.text, "html.parser")
-                # Keep some line breaks to encourage better formatting in the LLM output.
-                text = soup.get_text(separator="\n", strip=True)
-                clean = re.sub(r"[ \t]+", " ", text)[:5000]
-                context += f"\n\n--- From {url} ---\n{clean}"
-                sources.append(url)
-            except Exception as e:
-                print(f"Failed to fetch {url}: {e}")
-                continue  # ← Keep going!
-
-        #if no context → fallback
-        if not context.strip():
-            return {
-                "reply": "I couldn't find current info on that. Try asking about dining, events, or housing!",
-                "sources": []
-            }
-
-        # call LLM
-        def _format_reply(text: str) -> str:
-            text = text.strip().replace("\r\n", "\n").replace("\r", "\n")
-            # Put numbered list items on their own lines.
-            text = re.sub(r"(?<!\n)(\d+\.)\s+", r"\n\1 ", text)
-            # Put bullet items on their own lines.
-            text = re.sub(r"(?<!\n)([•*-])\s+", r"\n\1 ", text)
-            # If the model still returns a single paragraph, split on sentences.
-            if "\n" not in text:
-                text = re.sub(r"(?<=[.!?])\s+", "\n", text)
-            # Limit excessive vertical whitespace.
-            return re.sub(r"\n{3,}", "\n\n", text)
-
+    embeddings = OllamaEmbeddings(model=EMBED_MODEL)
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=CHUNK_SIZE,
+        chunk_overlap=CHUNK_OVERLAP,
+    )
+    # to store all url info
+    docs: List[Document] = []
+    ok = 0
+    # loop through each url and build index
+    print(f"[RAG] Building index from {len(urls)} URLs...")
+    for i, url in enumerate(urls):
         try:
-            reply = llm.invoke(prompt_template.invoke({
-                "context": context,
-                "question": question
-            })).content.strip()
-            reply = sanitize_text(reply)
-            reply = _format_reply(reply)
+            # get text from the url
+            page_text = fetch_url_text(url)
+            if not page_text:
+                continue
+            # add content to docs
+            docs.append(Document(page_content=page_text, metadata={"source": url}))
+            ok += 1
+        # if you cant fetch content from the url
         except Exception as e:
-            print("LLM error:", e)
-            reply = "I'm having trouble thinking right now."
+            print(f"[RAG] fetch failed: {url} | {repr(e)}")
+        # sleep
+        if SLEEP_EVERY_N and (i + 1) % SLEEP_EVERY_N == 0:
+            time.sleep(SLEEP_SECONDS)
+    # error handeling
+    if not docs:
+        raise RuntimeError("[RAG] No documents ingested. Check URLs and scraping access.")
+    # split into chunks
+    splits = splitter.split_documents(docs)
+    print(f"[RAG] Ingested pages: {ok} | Chunks: {len(splits)}")
+    # build + save
+    store = FAISS.from_documents(splits, embeddings)
+    index_dir.mkdir(parents=True, exist_ok=True)
+    store.save_local(str(index_dir))
+    print(f"[RAG] Saved FAISS index to: {index_dir}")
+    # return num_pages_ingested and num_chunks
+    return ok, len(splits)
 
-        return {
-            "reply": reply or ", no information found in given resources.",
-            "sources": sources[:5]
-        }
 
-    except Exception as e:
-        print("RAG error:", e)
-        return {
-            "reply": "Sorry, I'm having trouble right now.",
-            "sources": []  # ← ALWAYS INCLUDE
-        }
+# load the faiss index from disk
+def load_index(index_dir: Path = DEFAULT_INDEX_DIR) -> FAISS:
+    embeddings = OllamaEmbeddings(model=EMBED_MODEL)
+    return FAISS.load_local(
+        str(index_dir),
+        embeddings,
+        allow_dangerous_deserialization=True,
+    )
+
+
+# cache vector store per process (fast for Azure Functions)
+_VECTOR_STORE: Optional[FAISS] = None
+
+
+# get vector store
+def get_vector_store(index_dir: Path = DEFAULT_INDEX_DIR) -> FAISS:
+    global _VECTOR_STORE
+    if _VECTOR_STORE is None:
+        if not index_dir.exists():
+            raise FileNotFoundError(
+                f"[RAG] FAISS index not found at {index_dir}. "
+                f"Run build_index() first (nightly job) or build locally."
+            )
+        _VECTOR_STORE = load_index(index_dir)
+        print("[RAG] FAISS index loaded.")
+    return _VECTOR_STORE
+
+
+def retrieve(question: str, k: int = 6) -> List[Document]:
+    store = get_vector_store()
+    if USE_SCORE_THRESHOLD:
+        docs_and_scores = store.similarity_search_with_score(question, k=k)
+        filtered = [d for (d, score) in docs_and_scores if score < SCORE_THRESHOLD]
+        if DEBUG_RETRIEVAL:
+            for d, score in docs_and_scores:
+                print("\n--- RETRIEVED ---")
+                print("score:", score, "source:", d.metadata.get("source"))
+                print(d.page_content[:350])
+        return filtered[:k]
+    else:
+        docs = store.similarity_search(question, k=k)
+        if DEBUG_RETRIEVAL:
+            for d in docs:
+                print("\n--- RETRIEVED ---")
+                print("source:", d.metadata.get("source"))
+                print(d.page_content[:350])
+        return docs
+    
+# 
+
+
+# Optional: if you want this file to be runnable manually
+if __name__ == "__main__":
+    # Example: build full index
+    build_index(DEFAULT_URLS_TXT, DEFAULT_INDEX_DIR)
