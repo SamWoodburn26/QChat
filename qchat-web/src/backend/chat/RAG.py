@@ -1,4 +1,6 @@
 
+import random
+from urllib.parse import unquote, urlparse
 from langchain_core.prompts import ChatPromptTemplate
 import os
 import re
@@ -9,6 +11,8 @@ from .profanity_filter import sanitize_text
 
 # greetings to aviod rag answering
 GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
+# stop words and punctuation
+STOPWORDS = {"the","a","an","and","or","to","of","in","on","for","with","is","are","was","were","it","this","that","i","you","we","they","my","your","our","at","from","by","as","about","please","can","could","would","tell","me","what","when","where","how"}
 # reading qu doc
 QU_DOCS_PATH = os.path.join(os.path.dirname(__file__), "qu_docs.txt")
 # llm
@@ -16,6 +20,7 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")
 _NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
 _NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "256"))
+
 def _preload_model():
     try:
         # Preload and keep the model warm to reduce first-token latency
@@ -28,6 +33,48 @@ def _preload_model():
         pass
 
 _preload_model()
+
+# get the important words/ tokenize
+def tokenize(q:str) -> list[str]:
+    q = q.lower
+    q = re.sub(r"[^a-z0-9\s]", " ", q)
+    # tokens = words not in stopwords (fillers) and length greater than 2
+    tokens = [t for t in q.split() if t and t not in STOPWORDS and len(t)>2]
+    return tokens
+
+def url_tokens(url: str) -> set[str]:
+    p = urlparse(url)
+    path = unquote(p.path.lower())
+    #split on / - _ .
+    parts = re.split(r"[\/\-_\.]+", path)
+    return {x for x in parts if x and len(x)>2}
+
+# scoring function to rank urls and break ties randomly
+def rank_urls(question: str, urls: list[str], k: int=5) -> list[str]:
+    print("ranking urls")
+    q_tokens = tokenize(question)
+    if not q_tokens:
+        return urls[:k]
+    # loop through each url and get a list of urls matching the tokens
+    scored = []
+    for url in urls:
+        u_tokens = url_tokens(url)
+        # number of keyword matches
+        hits = sum(1 for t in q_tokens if t in u_tokens)
+        if hits > 0:
+            scored.append((url, hits))
+    # if no urls are found get random (this could be improved but is better than just the first few)
+    if not scored:
+        return random.sample(urls, min(k, len(urls)))
+    # sort by hits descending, then shuffle within ties
+    scored.sort(key=lambda x: x[1], revers = True)
+    top_score = scored[0][1]
+    top_bucket = [u for u, s in scored if s == top_score]
+    rest = [u for u, s in scored if s != top_score]
+    random.shuffle(top_bucket)
+    # return
+    return (top_bucket + rest)[:k]
+        
 
 # LangChain LLM configured to call local Ollama (tuned for speed)
 llm = ChatOllama(
@@ -52,7 +99,16 @@ prompt_template = ChatPromptTemplate.from_messages([
      "- If the question is a greeting (hi, hello, hey, etc.) → respond friendly and invite a real question.\n"
      "- If the answer is NOT in the context and NOT a greeting → say: 'I don't know. Try asking about dining, housing, athletics, or MyQ.'\n"
      "- NEVER make up information.\n"
-     "- ALWAYS be helpful and positive.\n"),
+     "- ALWAYS be helpful and positive.\n"
+     "- NEVER make up or modify the links given, provide the exact link without any adjustments.\n"
+     "- assume the student is an undergraduate living on Mount Carmel, unless otherwise told. \n"
+     "Formatting rules:\n"
+     "- Use short paragraphs\n"
+     "- Use bullet points for lists\n"
+     "- Use headings when appropriate\n"
+     "- Do NOT return one long block of text\n"
+     "- Preserve line breaks\n"
+     "- When there is a numbered list seperate each number with a new line"),
     ("human", "Context:\n{context}\n\nUser: {question}")
 ])
 
@@ -67,9 +123,6 @@ try:
 except Exception as e:
     print(f"ERROR loading qu_docs.txt: {e}")
     QU_DOCS_URLS = []
-# prompt template
-
-# qu docs url
 
 def answer_with_rag(question: str) -> dict:
     # handle greeting
@@ -77,6 +130,7 @@ def answer_with_rag(question: str) -> dict:
         return {"reply": "Hi! I'm QChat. Ask me anything about Quinnipiac!", "sources": []}
 
     try:
+        '''
         q_lower = question.lower()
         candidates = []
 
@@ -94,9 +148,12 @@ def answer_with_rag(question: str) -> dict:
                 candidates.append((url, score))
 
         candidates.sort(key=lambda x: x[1], reverse=True)
-        top_urls = [url for url, _ in candidates[:4]]
-        if not top_urls:
-            top_urls = QU_DOCS_URLS[:3]
+        '''
+        #top_urls = [url for url, _ in candidates[:4]]
+        top_urls = rank_urls(question, QU_DOCS_URLS, k=5)
+
+        for url in top_urls:
+            print(url)
 
         # fetch content safely
         context = ""
@@ -109,8 +166,9 @@ def answer_with_rag(question: str) -> dict:
                 if r.status_code != 200:
                     continue
                 soup = BeautifulSoup(r.text, "html.parser")
-                text = soup.get_text(separator=" ", strip=True)
-                clean = re.sub(r"\s+", " ", text)[:5000]
+                # Keep some line breaks to encourage better formatting in the LLM output.
+                text = soup.get_text(separator="\n", strip=True)
+                clean = re.sub(r"[ \t]+", " ", text)[:5000]
                 context += f"\n\n--- From {url} ---\n{clean}"
                 sources.append(url)
             except Exception as e:
@@ -125,19 +183,32 @@ def answer_with_rag(question: str) -> dict:
             }
 
         # call LLM
+        def _format_reply(text: str) -> str:
+            text = text.strip().replace("\r\n", "\n").replace("\r", "\n")
+            # Put numbered list items on their own lines.
+            text = re.sub(r"(?<!\n)(\d+\.)\s+", r"\n\1 ", text)
+            # Put bullet items on their own lines.
+            text = re.sub(r"(?<!\n)([•*-])\s+", r"\n\1 ", text)
+            # If the model still returns a single paragraph, split on sentences.
+            if "\n" not in text:
+                text = re.sub(r"(?<=[.!?])\s+", "\n", text)
+            # Limit excessive vertical whitespace.
+            return re.sub(r"\n{3,}", "\n\n", text)
+
         try:
             reply = llm.invoke(prompt_template.invoke({
                 "context": context,
                 "question": question
             })).content.strip()
             reply = sanitize_text(reply)
+            reply = _format_reply(reply)
         except Exception as e:
             print("LLM error:", e)
             reply = "I'm having trouble thinking right now."
 
         return {
-            "reply": reply or "I don't know.",
-            "sources": sources[:2]
+            "reply": reply or ", no information found in given resources.",
+            "sources": sources[:5]
         }
 
     except Exception as e:
