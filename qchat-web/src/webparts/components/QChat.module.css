@@ -1,5 +1,7 @@
 /* Removed SCSS @import – you'll handle any global styles separately */
 
+/* COLORS navy: #0C2340, gold: #FFB81C, light blue: #418FDE */
+
 /* Main QChat container */
 .qChat {
     overflow: hidden;
