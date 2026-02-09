@@ -1,286 +1,287 @@
 """
-Personal Question Handler - Answers questions about the user from their profile
+Personal Question Handler - Uses LLM to answer questions about the user from their profile
 
-This module detects when users ask personal questions (my major, my classes, etc.)
-and answers directly from their profile instead of searching the web.
+This module uses the LLM to intelligently:
+- Detect when users ask personal questions (my major, my classes, etc.)
+- Answer directly from their profile instead of searching the web
+- Format responses naturally based on available profile data
 """
 
-import re
+import json
+import os
 from typing import Optional, Dict, Any
+from langchain_ollama import ChatOllama
+from langchain_core.prompts import ChatPromptTemplate
 from .profile_service import get_user_profile
 
+# LLM Configuration
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")
 
-def is_personal_question(question: str) -> bool:
-    """
-    Detect if a question is asking about the user's personal information.
-    
-    Args:
-        question: The user's question
-        
-    Returns:
-        True if it's a personal question, False otherwise
-    """
-    q_lower = question.lower()
-    
-    # Personal pronouns indicating questions about the user
-    personal_indicators = [
-        r'\bmy\b',
-        r'\bam i\b',
-        r"\bi'm\b",
-        r'\bdo i\b',
-        r'\bwhat am i\b',
-        r'\bwhen do i\b',
-        r'\bwhere do i\b',
-        r'\bwho is my\b',
-    ]
-    
-    # Topics that would be in profile
-    profile_topics = [
-        r'\bmajor\b',
-        r'\bminor\b',
-        r'\bclass(?:es)?\b',
-        r'\bcourse(?:s)?\b',
-        r'\bschedule\b',
-        r'\badvisor\b',
-        r'\bactiv(?:ity|ities)\b',
-        r'\bclub(?:s)?\b',
-        r'\bteam\b',
-        r'\byear\b',
-        r'\bgrade\b',
-        r'\bgpa\b',
-        r'\bprofessor\b',
-        r'\bpractice\b',
-        r'\bdietary\b',
-        r'\ballerg(?:y|ies|ic)\b',
-        r'\bfavorite\b',
-        r'\bprefer(?:ence|red)?\b',
-    ]
-    
-    # Check if question has personal pronouns AND profile topics
-    has_personal = any(re.search(pattern, q_lower) for pattern in personal_indicators)
-    has_topic = any(re.search(pattern, q_lower) for pattern in profile_topics)
-    
-    return has_personal and has_topic
+# LLM for personal question handling
+personal_qa_llm = ChatOllama(
+    model=OLLAMA_MODEL,
+    base_url=OLLAMA_URL,
+    temperature=0.2,  # Low temperature for consistent, factual answers
+    format="json"
+)
 
+# Prompt for analyzing if question is personal
+detection_prompt = ChatPromptTemplate.from_messages([
+    ("system",
+     """You are analyzing user questions to determine if they're asking about their personal information.
 
-def answer_from_profile(question: str, username: str) -> Optional[Dict[str, Any]]:
-    """
-    Try to answer a personal question from the user's profile.
-    
-    Args:
-        question: The user's question
-        username: The username to look up
-        
-    Returns:
-        Dict with reply and sources if answer found, None otherwise
-    """
-    if not username or username == "anonymous":
-        return None
-    
-    profile = get_user_profile(username)
-    if not profile:
-        return None
-    
-    q_lower = question.lower()
-    
-    # Major question
-    if 'major' in q_lower:
-        major = profile.get('personal_info', {}).get('major')
-        if major:
-            return {
-                "reply": f"Your major is {major}.",
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # Minor question
-    if 'minor' in q_lower:
-        minor = profile.get('personal_info', {}).get('minor')
-        if minor:
-            return {
-                "reply": f"Your minor is {minor}.",
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-        elif profile.get('personal_info', {}).get('major'):
-            return {
-                "reply": "I don't have information about your minor. You can tell me if you have one!",
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # Year question
-    if re.search(r'\byear\b|\bgrade\b', q_lower):
-        year = profile.get('personal_info', {}).get('year')
-        if year:
-            return {
-                "reply": f"You're a {year}.",
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # Classes question
-    if re.search(r'\bclass(?:es)?\b|\bcourse(?:s)?\b', q_lower):
-        classes = profile.get('schedule', {}).get('classes', [])
-        if classes:
-            class_list = []
-            for cls in classes:
-                code = cls.get('code', '')
-                name = cls.get('name', '')
-                prof = cls.get('professor', '')
-                schedule = cls.get('schedule', '')
-                
-                class_str = code if code else name
-                if prof:
-                    class_str += f" with {prof}"
-                if schedule:
-                    class_str += f" ({schedule})"
-                class_list.append(class_str)
-            
-            if len(class_list) == 1:
-                reply = f"You're taking {class_list[0]}."
-            else:
-                reply = f"You're taking these classes:\n" + "\n".join(f"• {c}" for c in class_list)
-            
-            return {
-                "reply": reply,
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # Schedule/practice question
-    if re.search(r'\bschedule\b|\bpractice\b|\bwhen do i\b', q_lower):
-        # Check for activities/schedule notes
-        activities = profile.get('schedule', {}).get('extracurriculars', [])
-        notes = profile.get('notes', [])
-        
-        schedule_items = []
-        
-        # Add activities
-        if activities:
-            schedule_items.extend([f"• {act}" for act in activities])
-        
-        # Check notes for schedule info
-        for note in notes:
-            if isinstance(note, dict):
-                text = note.get('text', '')
-            else:
-                text = str(note)
-            
-            if 'schedule' in text.lower() or 'practice' in text.lower():
-                schedule_items.append(f"• {text}")
-        
-        if schedule_items:
-            reply = "Here's what I know about your schedule:\n" + "\n".join(schedule_items)
-            return {
-                "reply": reply,
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # Advisor question
-    if 'advisor' in q_lower:
-        advisor = profile.get('academic', {}).get('advisor')
-        if advisor:
-            return {
-                "reply": f"Your advisor is {advisor}.",
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # GPA question
-    if 'gpa' in q_lower:
-        gpa = profile.get('academic', {}).get('gpa')
-        if gpa:
-            return {
-                "reply": f"Your GPA is {gpa}.",
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # Dietary/allergies question
-    if re.search(r'\bdietary\b|\ballerg', q_lower):
-        dietary = profile.get('preferences', {}).get('dietary_restrictions', [])
-        if dietary:
-            reply = f"Your dietary restrictions: {', '.join(dietary)}."
-            return {
-                "reply": reply,
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # Favorite dining question
-    if 'favorite' in q_lower and any(word in q_lower for word in ['dining', 'eat', 'food', 'caf']):
-        favorites = profile.get('preferences', {}).get('favorite_dining_halls', [])
-        if favorites:
-            reply = f"Your favorite dining halls: {', '.join(favorites)}."
-            return {
-                "reply": reply,
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # General profile summary question
-    if re.search(r'who am i|tell me about me|what do you know about me', q_lower):
-        summary_parts = []
-        
-        personal = profile.get('personal_info', {})
-        if personal.get('name'):
-            summary_parts.append(f"Your name is {personal['name']}")
-        if personal.get('year'):
-            summary_parts.append(f"You're a {personal['year']}")
-        if personal.get('major'):
-            summary_parts.append(f"majoring in {personal['major']}")
-        if personal.get('minor'):
-            summary_parts.append(f"with a minor in {personal['minor']}")
-        
-        classes = profile.get('schedule', {}).get('classes', [])
-        if classes:
-            class_codes = [c.get('code', c.get('name', '')) for c in classes[:3]]
-            summary_parts.append(f"taking {', '.join(class_codes)}")
-        
-        activities = profile.get('schedule', {}).get('extracurriculars', [])
-        if activities:
-            summary_parts.append(f"participating in {', '.join(activities[:3])}")
-        
-        if summary_parts:
-            reply = ". ".join(summary_parts) + "."
-            reply = reply.replace(". .", ".")
-            return {
-                "reply": reply,
-                "sources": ["user_profile"],
-                "source": "profile"
-            }
-    
-    # If we get here, the question seems personal but we don't have the answer
-    return None
+A question is PERSONAL if it:
+- Asks about the user themselves (uses "my", "I", "me", "am I", etc.)
+- Relates to student information (major, classes, schedule, activities, etc.)
+
+A question is NOT PERSONAL if it:
+- Asks about general university information
+- Asks about services, locations, or policies
+- Doesn't refer to the user specifically
+
+Examples:
+- "What's my major?" → PERSONAL
+- "What are my classes?" → PERSONAL
+- "When do I have practice?" → PERSONAL
+- "What majors does QU offer?" → NOT PERSONAL (general question)
+- "Where is the library?" → NOT PERSONAL (general question)
+- "What's for lunch?" → NOT PERSONAL (general question)
+
+Return JSON: {{"is_personal": true/false, "reasoning": "brief explanation"}}"""),
+    ("human", "Question: {question}\n\nIs this a personal question about the user?")
+])
+
+# Prompt for answering from profile
+answer_prompt = ChatPromptTemplate.from_messages([
+    ("system",
+     """You are QChat, answering questions about a student using their profile information.
+
+Your task:
+1. Look at the student's profile data
+2. Answer their question using ONLY information from their profile
+3. If the question asks for ADDITIONAL INFO about profile items (like course descriptions, dining hall menus, etc.), signal that enrichment is needed
+4. Be friendly, concise, and helpful
+
+RULES:
+- ONLY use information from the provided profile
+- Do NOT make up or assume information
+- If profile is empty or missing the requested info, say: "I don't have that information about you yet. Feel free to tell me!"
+- Format lists nicely (use bullet points for multiple items)
+- Be conversational and friendly
+
+ENRICHMENT DETECTION:
+If the user asks for MORE INFO about items in their profile (e.g., "describe my courses", "what's for lunch at my dining hall"), set needs_enrichment=true and provide an enriched_query.
+
+Examples:
+- "What are my classes?" → can_answer=true (just list from profile)
+- "Describe my courses" → needs_enrichment=true, enriched_query="What are the course descriptions for [course codes]?"
+- "What's my favorite dining hall menu?" → needs_enrichment=true, enriched_query="What's on the menu at [dining hall]?"
+
+Return JSON: {{
+  "can_answer": true/false,
+  "needs_enrichment": true/false,
+  "enriched_query": "question to ask RAG with profile context" (if needs_enrichment),
+  "answer": "your response to the user",
+  "used_fields": ["list", "of", "profile fields used"]
+}}"""),
+    ("human",
+     """Student Profile:
+{profile}
+
+Student Question: {question}
+
+Answer the question using the profile information:""")
+])
 
 
 def try_answer_personal_question(question: str, username: str) -> Optional[Dict[str, Any]]:
     """
-    Main entry point: Check if question is personal and try to answer from profile.
+    Use LLM to detect personal questions and answer from profile.
     
     Args:
         question: The user's question
         username: The username
         
     Returns:
-        Dict with reply if answered from profile, None to fall back to RAG
+        Dict with reply if answered from profile, None to fall back to FAQ/RAG
     """
-    # Check if it's a personal question
-    if not is_personal_question(question):
+    if not username or username == "anonymous":
         return None
     
-    # Try to answer from profile
-    answer = answer_from_profile(question, username)
+    try:
+        # STEP 1: Use LLM to detect if this is a personal question
+        detection_response = personal_qa_llm.invoke(
+            detection_prompt.invoke({"question": question})
+        )
+        
+        try:
+            detection = json.loads(detection_response.content)
+        except json.JSONDecodeError:
+            print(f"Failed to parse detection response: {detection_response.content}")
+            return None
+        
+        if not detection.get("is_personal"):
+            print(f"Not a personal question: {detection.get('reasoning')}")
+            return None
+        
+        print(f"✓ Detected personal question: {detection.get('reasoning')}")
+        
+        # STEP 2: Get user profile
+        profile = get_user_profile(username)
+        if not profile:
+            return {
+                "reply": "I don't have any information about you yet. Feel free to tell me about yourself, and I'll remember it!",
+                "sources": ["user_profile"],
+                "source": "profile"
+            }
+        
+        # Format profile as readable text for LLM
+        profile_text = _format_profile_for_llm(profile)
+        
+        # STEP 3: Use LLM to answer from profile
+        answer_response = personal_qa_llm.invoke(
+            answer_prompt.invoke({
+                "profile": profile_text,
+                "question": question
+            })
+        )
+        
+        try:
+            answer_data = json.loads(answer_response.content)
+        except json.JSONDecodeError:
+            print(f"Failed to parse answer response: {answer_response.content}")
+            return None
+        
+        # Check if we need to enrich with external data
+        if answer_data.get("needs_enrichment"):
+            enriched_query = answer_data.get("enriched_query")
+            if enriched_query:
+                print(f"✓ Needs enrichment - will use RAG with query: {enriched_query}")
+                # Return special signal for enrichment
+                return {
+                    "needs_enrichment": True,
+                    "enriched_query": enriched_query,
+                    "profile": profile  # Pass profile for context
+                }
+        
+        if answer_data.get("can_answer"):
+            print(f"✓ Answered from profile using fields: {answer_data.get('used_fields', [])}")
+            return {
+                "reply": answer_data.get("answer", "I don't have that information about you yet."),
+                "sources": ["user_profile"],
+                "source": "profile"
+            }
+        else:
+            # Personal question but no answer in profile
+            return {
+                "reply": answer_data.get("answer", "I don't have that information about you yet. Feel free to tell me!"),
+                "sources": ["user_profile"],
+                "source": "profile"
+            }
+        
+    except Exception as e:
+        print(f"Error in personal question handling: {repr(e)}")
+        import traceback
+        traceback.print_exc()
+        return None
+
+
+def _format_profile_for_llm(profile: Dict[str, Any]) -> str:
+    """
+    Format profile data as readable text for the LLM.
     
-    if answer:
-        return answer
+    Args:
+        profile: User profile dict
+        
+    Returns:
+        Formatted profile string
+    """
+    lines = []
     
-    # Personal question but no answer in profile
-    # Return a helpful message
-    return {
-        "reply": "I don't have that information about you yet. Feel free to tell me, and I'll remember it for next time!",
-        "sources": ["user_profile"],
-        "source": "profile"
-    }
+    # Personal Information
+    personal = profile.get('personal_info', {})
+    if personal:
+        lines.append("PERSONAL INFORMATION:")
+        if personal.get('name'):
+            lines.append(f"  Name: {personal['name']}")
+        if personal.get('year'):
+            lines.append(f"  Year: {personal['year']}")
+        if personal.get('major'):
+            lines.append(f"  Major: {personal['major']}")
+        if personal.get('minor'):
+            lines.append(f"  Minor: {personal['minor']}")
+        lines.append("")
+    
+    # Classes
+    schedule = profile.get('schedule', {})
+    classes = schedule.get('classes', [])
+    if classes:
+        lines.append("CLASSES:")
+        for cls in classes:
+            class_info = []
+            if cls.get('code'):
+                class_info.append(cls['code'])
+            if cls.get('name'):
+                class_info.append(cls['name'])
+            line = f"  • {' - '.join(class_info) if class_info else 'Class'}"
+            if cls.get('professor'):
+                line += f" with {cls['professor']}"
+            if cls.get('schedule'):
+                line += f" ({cls['schedule']})"
+            if cls.get('location'):
+                line += f" in {cls['location']}"
+            lines.append(line)
+        lines.append("")
+    
+    # Activities
+    activities = schedule.get('extracurriculars', [])
+    if activities:
+        lines.append("ACTIVITIES & EXTRACURRICULARS:")
+        for activity in activities:
+            lines.append(f"  • {activity}")
+        lines.append("")
+    
+    # Preferences
+    prefs = profile.get('preferences', {})
+    if prefs:
+        lines.append("PREFERENCES:")
+        if prefs.get('dietary_restrictions'):
+            lines.append(f"  Dietary: {', '.join(prefs['dietary_restrictions'])}")
+        if prefs.get('favorite_dining_halls'):
+            lines.append(f"  Favorite Dining: {', '.join(prefs['favorite_dining_halls'])}")
+        if prefs.get('study_locations'):
+            lines.append(f"  Study Locations: {', '.join(prefs['study_locations'])}")
+        if prefs.get('topics_of_interest'):
+            lines.append(f"  Interests: {', '.join(prefs['topics_of_interest'])}")
+        lines.append("")
+    
+    # Academic
+    academic = profile.get('academic', {})
+    if academic:
+        lines.append("ACADEMIC:")
+        if academic.get('advisor'):
+            lines.append(f"  Advisor: {academic['advisor']}")
+        if academic.get('gpa'):
+            lines.append(f"  GPA: {academic['gpa']}")
+        if academic.get('dean_list'):
+            lines.append(f"  Dean's List: Yes")
+        lines.append("")
+    
+    # Recent Notes
+    notes = profile.get('notes', [])
+    if notes:
+        lines.append("OTHER INFORMATION:")
+        # Show last 5 notes
+        recent_notes = sorted(notes, key=lambda x: x.get('timestamp', ''), reverse=True)[:5]
+        for note in recent_notes:
+            if isinstance(note, dict):
+                lines.append(f"  • {note.get('text', '')}")
+            else:
+                lines.append(f"  • {note}")
+        lines.append("")
+    
+    if not lines:
+        return "No profile information available yet."
+    
+    return "\n".join(lines)
