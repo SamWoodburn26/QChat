@@ -6,6 +6,7 @@ from bs4 import BeautifulSoup
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 import requests
 from .profanity_filter import sanitize_text
+from .profile_service import get_profile_context
 
 # greetings to aviod rag answering
 GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
@@ -46,14 +47,17 @@ embeddings = OllamaEmbeddings(model="nomic-embed-text");
 prompt_template = ChatPromptTemplate.from_messages([
     ("system",
      "You are QChat, a helpful assistant for Quinnipiac University.\n"
-     "Your job is to answer using ONLY the provided context.\n\n"
+     "Your job is to answer using the provided context.\n\n"
      "RULES:\n"
-     "- If the answer is in the context → answer clearly and concisely.\n"
+     "- If user profile information is provided, USE IT to personalize your responses.\n"
+     "- When answering about the user specifically (their major, classes, schedule), refer to their profile.\n"
+     "- If the answer is in the web context → answer clearly and concisely.\n"
      "- If the question is a greeting (hi, hello, hey, etc.) → respond friendly and invite a real question.\n"
-     "- If the answer is NOT in the context and NOT a greeting → say: 'I don't know. Try asking about dining, housing, athletics, or MyQ.'\n"
+     "- If the answer is NOT in the context and NOT in the profile and NOT a greeting → say: 'I don't know. Try asking about dining, housing, athletics, or MyQ.'\n"
      "- NEVER make up information.\n"
-     "- ALWAYS be helpful and positive.\n"),
-    ("human", "Context:\n{context}\n\nUser: {question}")
+     "- ALWAYS be helpful and positive.\n"
+     "- Remember details about the user (classes, schedule, preferences) to provide better assistance.\n"),
+    ("human", "{user_context}Context:\n{context}\n\nUser: {question}")
 ])
 
 try:
@@ -71,12 +75,19 @@ except Exception as e:
 
 # qu docs url
 
-def answer_with_rag(question: str) -> dict:
+def answer_with_rag(question: str, username: str = None) -> dict:
     # handle greeting
     if GREETINGS_LIST.search(question.strip()):
         return {"reply": "Hi! I'm QChat. Ask me anything about Quinnipiac!", "sources": []}
 
     try:
+        # Get user profile context if username provided
+        user_context = ""
+        if username:
+            user_context = get_profile_context(username)
+            if user_context:
+                user_context = user_context + "\n\n"
+        
         q_lower = question.lower()
         candidates = []
 
@@ -127,6 +138,7 @@ def answer_with_rag(question: str) -> dict:
         # call LLM
         try:
             reply = llm.invoke(prompt_template.invoke({
+                "user_context": user_context,
                 "context": context,
                 "question": question
             })).content.strip()
