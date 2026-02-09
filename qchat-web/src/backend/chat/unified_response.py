@@ -31,7 +31,7 @@ _NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "512"))
 unified_llm = ChatOllama(
     model=OLLAMA_MODEL,
     base_url=OLLAMA_URL,
-    temperature=0.3,  # Balanced for factual yet natural responses
+    temperature=0.0,  # Zero temperature for completely deterministic, consistent formatting
     num_ctx=_NUM_CTX,
     model_kwargs={"num_predict": _NUM_PREDICT},
 )
@@ -52,41 +52,37 @@ except Exception as e:
 # Unified prompt template
 unified_prompt = ChatPromptTemplate.from_messages([
     ("system",
-     """You are QChat, a helpful and intelligent assistant for Quinnipiac University students.
+     """You are QChat, a helpful assistant for Quinnipiac University students.
 
-You have access to THREE sources of information:
-1. USER PROFILE - Personal information about this specific student
-2. FAQ DATABASE - Common questions and official answers
-3. WEB CONTENT - Live information from Quinnipiac University websites
+You have access to:
+1. USER PROFILE - Personal information about this student
+2. FAQ DATABASE - Common questions and official answers  
+3. WEB CONTENT - Information from Quinnipiac University websites
 
-YOUR TASK:
-- Understand what the user is asking
-- Decide which information sources are relevant
-- Provide accurate, helpful, personalized answers
-- Cite your sources appropriately
-
-DECISION MAKING:
-- Personal questions (my major, my classes, my schedule) → Use USER PROFILE
-- Common policy/procedure questions → Prefer FAQ DATABASE (most reliable)
-- Specific current info (menus, events, details) → Use WEB CONTENT
-- Questions about user's profile items (describe my courses) → Combine PROFILE + WEB CONTENT
-
-RULES:
+ANSWER RULES:
+- Use the most relevant information sources
 - Be conversational and friendly
-- NEVER make up information - only use provided sources
-- If you don't have the info, say so clearly
+- Never make up information
 - Personalize responses when you have user context
-- For greetings, be welcoming and invite questions
-- Keep answers concise but complete
+- Keep answers clear and concise
 
-URL FORMATTING:
-- When mentioning URLs, format them as plain text followed by the URL in parentheses
-- Example: "You can find more information on the Programs Listing page (https://www.qu.edu/academics/about-our-programs/programs-listing/)"
-- DO NOT use markdown link syntax like [text](url)
-- Always include the full URL so users can click it
+CRITICAL - URL FORMATTING:
+When including URLs, write them EXACTLY as plain text with NO markup whatsoever:
 
-SOURCE CITATION:
-Indicate which sources you used: "user_profile", "faq", "web", or combinations like "profile+web"
+✓ CORRECT:
+"Visit https://dineoncampus.com/quinnipiac/events for dining info."
+"Check out https://www.qu.edu/student-life/ today."
+"Menu: https://dineoncampus.com/quinnipiac/cafe-q"
+
+✗ WRONG - NEVER EVER DO THESE:
+"Visit [the site](https://url.com)" ← NO
+"Visit <a href='https://url.com'>link</a>" ← NO
+"Visit https://url.com\" target=\"_blank\"" ← NO
+"Visit href=\"https://url.com\"" ← NO
+Any brackets, quotes, attributes, or tags ← NO
+
+WRITE ONLY: https://example.com
+NOTHING ELSE. NO MARKUP. NO TAGS. NO ATTRIBUTES.
 """),
     ("human",
      """USER PROFILE:
@@ -100,7 +96,7 @@ WEB CONTENT:
 
 USER QUESTION: {question}
 
-Please answer using the appropriate information sources.""")
+Please answer using the appropriate information sources. Remember: Write URLs as plain text only, no markup.""")
 ])
 
 
@@ -115,8 +111,14 @@ def get_unified_response(question: str, username: str = None) -> Dict[str, Any]:
     Returns:
         Dict with reply, sources, and source type
     """
-    # Handle simple greetings quickly
-    if GREETINGS_LIST.search(question.strip()):
+    # Handle simple greetings quickly - only if it's JUST a greeting
+    # Remove common punctuation and check if what remains is only greeting words
+    question_check = re.sub(r'[!?.,:;]+', '', question.strip().lower())
+    words = question_check.split()
+    
+    # Only treat as greeting if it's 1-3 words and all are greetings
+    greeting_words = {'hi', 'hello', 'hey', 'hii', 'sup', 'what\'s', 'up', 'whats', 'there'}
+    if len(words) <= 3 and all(word in greeting_words for word in words):
         return {
             "reply": "Hi! I'm QChat, your Quinnipiac University assistant. Ask me anything about classes, dining, housing, athletics, or campus life!",
             "sources": [],
@@ -144,7 +146,15 @@ def get_unified_response(question: str, username: str = None) -> Dict[str, Any]:
         )
         
         reply = response.content.strip()
+        
+        # Debug: Show what LLM generated before cleanup
+        if '" target=' in reply or '">http' in reply:
+            print(f"⚠️  LLM generated broken HTML in reply. Cleaning...")
+            print(f"First 200 chars: {reply[:200]}")
+        
         reply = sanitize_text(reply)
+        reply = _clean_technical_references(reply)
+        reply = _format_reply_text(reply)
         reply = _format_urls_as_links(reply)
         
         # Determine source type from content
@@ -155,7 +165,14 @@ def get_unified_response(question: str, username: str = None) -> Dict[str, Any]:
         if "profile" in source_type:
             all_sources.append("user_profile")
         if web_sources:
-            all_sources.extend(web_sources[:3])  # Top 3 web sources
+            # Clean any broken HTML from source URLs before adding them
+            clean_sources = []
+            for url in web_sources[:3]:
+                cleaned = _clean_url(url)
+                if '" target=' in url or '">http' in url:
+                    print(f"⚠️  Cleaned source URL: {url[:80]}... -> {cleaned[:80]}...")
+                clean_sources.append(cleaned)
+            all_sources.extend(clean_sources)
         
         return {
             "reply": reply,
@@ -294,8 +311,16 @@ def _get_web_context(question: str) -> tuple[str, list]:
             r = requests.get(url, timeout=8, headers=headers)
             if r.status_code == 200:
                 soup = BeautifulSoup(r.text, "html.parser")
+                # Remove script and style elements
+                for script in soup(["script", "style"]):
+                    script.decompose()
                 text = soup.get_text(separator=" ", strip=True)
-                clean = re.sub(r"\s+", " ", text)[:3000]  # Limit per URL
+                # Remove any remaining HTML entities and excessive whitespace
+                clean = re.sub(r"\s+", " ", text)
+                # Remove any stray HTML-like patterns
+                clean = re.sub(r'<[^>]+>', '', clean)
+                clean = re.sub(r'href="[^"]*"', '', clean)
+                clean = clean[:3000]  # Limit per URL
                 context_parts.append(f"From {url}:\n{clean}\n")
                 sources.append(url)
         except Exception as e:
@@ -306,10 +331,63 @@ def _get_web_context(question: str) -> tuple[str, list]:
     return web_context, sources
 
 
+def _clean_technical_references(text: str) -> str:
+    """
+    Clean up technical references to make responses more natural.
+    
+    Args:
+        text: Response text possibly containing technical references
+        
+    Returns:
+        Cleaned text with technical references removed or simplified
+    """
+    # Remove overly technical source references
+    text = re.sub(r'\bFAQ DATABASE\b', 'our information', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bWEB CONTENT\b', 'university information', text, flags=re.IGNORECASE)
+    text = re.sub(r'\bUSER PROFILE\b', 'your profile', text, flags=re.IGNORECASE)
+    
+    # Clean up phrases like "Based on the FAQ DATABASE,"
+    text = re.sub(r'Based on (the |our )?our information,?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'According to (the |our )?our information,?\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'From (the |our )?university information,?\s*', '', text, flags=re.IGNORECASE)
+    
+    return text
+
+
+def _format_reply_text(text: str) -> str:
+    """
+    Format response text to be more readable.
+    
+    Args:
+        text: Raw text response
+        
+    Returns:
+        Formatted text with proper line breaks and spacing
+    """
+    if not text:
+        return text
+    t = text.strip().replace("\r\n", "\n").replace("\r", "\n")
+
+    # ensure headings start on their own line
+    t = re.sub(r"\s*(\*\*[^*\n]{2,80}\*\*:)\s*", r"\n\n\1\n", t)
+    # put bullets on their own lines (handles "- ", "• ", "* ")
+    t = re.sub(r"\s+(-\s+)", r"\n- ", t)
+    t = re.sub(r"\s+(•\s+)", r"\n• ", t)
+    t = re.sub(r"\s+(\*\s+)", r"\n* ", t)
+    # if a bullet is glued to a heading like "**X:** - item", split it
+    t = re.sub(r"(\*\*[^*\n]{2,80}\*\*:)\s*-\s*", r"\1\n- ", t)
+    # keep numbered items clean 
+    t = re.sub(r"\s+(\d+\.)\s+", r"\n\1 ", t)
+    # collapse too many blank lines
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    # return cleaned version
+    return t.strip()
+
+
 def _format_urls_as_links(text: str) -> str:
     """
-    Convert plain URLs in text to HTML anchor tags for clickable links.
-    Also removes markdown-style link formatting if present.
+    Convert plain URLs in text to clean HTML anchor tags for clickable links.
+    Aggressively removes any broken HTML fragments first.
     
     Args:
         text: Text potentially containing URLs
@@ -317,34 +395,65 @@ def _format_urls_as_links(text: str) -> str:
     Returns:
         Text with URLs converted to HTML links
     """
-    # First, convert markdown links [text](url) to "text (url)" format
-    # This handles cases where LLM still uses markdown despite instructions
-    markdown_link_pattern = r'\[([^\]]+)\]\(([^)]+)\)'
-    text = re.sub(markdown_link_pattern, r'\1 (\2)', text)
+    # AGGRESSIVE CLEANUP: Remove ALL broken HTML patterns first
+    # Pattern: href="url" or href='url'
+    text = re.sub(r'href=["\']https?://[^"\'>]*["\']', '', text)
     
-    # Then convert plain URLs to HTML anchor tags
-    # Match http:// or https:// URLs
-    url_pattern = r'(https?://[^\s\)]+)'
+    # Pattern: Any " target="_blank" or similar attributes
+    text = re.sub(r'"[^"]*target[^>]*>', '', text)
+    text = re.sub(r"'[^']*target[^>]*>", '', text)
+    
+    # Pattern: Any stray > preceded by quotes
+    text = re.sub(r'["\'][^"\'>]{0,50}>', '', text)
+    
+    # Remove all HTML anchor tags (both opening and closing)
+    text = re.sub(r'</?a[^>]*>', '', text)
+    
+    # Remove markdown links [text](url)
+    text = re.sub(r'\[([^\]]+)\]\((https?://[^)]+)\)', r'\2', text)
+    
+    # Clean up any remaining broken patterns around URLs
+    # This catches: URL"stuff or URL'stuff
+    text = re.sub(r'(https?://[^\s<>"\'";]+)["\'][^\s<>]*', r'\1', text)
+    
+    # Now convert plain URLs to clean HTML
+    # Match URLs not already in href=""
+    url_pattern = r'(?<!href=")(?<!href=\')(https?://[^\s<>"\'";]+)'
     
     def make_link(match):
-        url = match.group(1)
-        # Extract a friendly name from the URL path
-        # e.g., https://www.qu.edu/admissions/ -> "admissions"
-        try:
-            path_parts = url.rstrip('/').split('/')
-            if len(path_parts) > 3:
-                friendly_name = path_parts[-1].replace('-', ' ').title()
-            else:
-                friendly_name = "here"
-            return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>'
-        except:
-            return f'<a href="{url}" target="_blank" rel="noopener noreferrer">{url}</a>'
-    
-    text = re.sub(url_pattern, make_link, text)
+        url = match.group(1).rstrip('.,;:!?)"\'')  # Remove trailing punctuation
     
     return text
 
 
+def _clean_url(url: str) -> str:
+    """
+    Clean a URL of any broken HTML fragments.
+    Extracts just the pure URL.
+    
+    Args:
+        url: URL string that might contain broken HTML
+        
+    Returns:
+        Clean URL string
+    """
+    # Strip everything and extract ONLY the URL
+    # Remove quotes and everything after them
+    url = re.split(r'["\']', url)[0]
+    
+    # Remove any HTML tag fragments
+    url = re.sub(r'<[^>]*>', '', url)
+    url = re.sub(r'target=.*', '', url)
+    url = re.sub(r'rel=.*', '', url)
+    url = re.sub(r'href=.*', '', url)
+    
+    # Extract the first complete URL
+    match = re.search(r'(https?://[^\s<>"\';]+)', url)
+    if match:
+        clean = match.group(1).rstrip('.,;:!?)"\'')
+        return clean
+    
+    # If no URL found Return original stripped
 def _detect_source_type(reply: str, has_profile: bool, has_faq: bool, has_web: bool) -> str:
     """Detect which sources were likely used based on available data."""
     # This is a simple heuristic - could be improved with LLM signaling

@@ -1,6 +1,6 @@
 # ollama to make the gemma model
 import azure.functions as func
-import json, os
+import json, os, re
 from datetime import datetime
 from pymongo import MongoClient
 import certifi
@@ -66,6 +66,28 @@ def _init_db_once():
         db = None
         _db_ready = False
         _db_error = repr(e)
+
+
+# to format the response to be more readable
+def format_reply(text: str) -> str:
+    if not text:
+        return text
+    t = text.strip().replace("\r\n", "\n").replace("\r", "\n")
+
+    # ensure headings start on their own line
+    t = re.sub(r"\s*(\*\*[^*\n]{2,80}\*\*:)\s*", r"\n\n\1\n", t)
+    # put bullets on their own lines (handles "- ", "• ", "* ")
+    t = re.sub(r"\s+(-\s+)", r"\n- ", t)
+    t = re.sub(r"\s+(•\s+)", r"\n• ", t)
+    t = re.sub(r"\s+(\*\s+)", r"\n* ", t)
+    # if a bullet is glued to a heading like "**X:** - item", split it
+    t = re.sub(r"(\*\*[^*\n]{2,80}\*\*:)\s*-\s*", r"\1\n- ", t)
+    # keep numbered items clean 
+    t = re.sub(r"\s+(\d+\.)\s+", r"\n\1 ", t)
+    # collapse too many blank lines
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    # return cleaned version
+    return t.strip()
 
 
 def _get_recent_conversation_history(username: str, limit: int = 10) -> list:

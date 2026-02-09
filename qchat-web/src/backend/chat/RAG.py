@@ -75,8 +75,12 @@ except Exception as e:
 # qu docs url
 
 def answer_with_rag(question: str, username: str = None) -> dict:
-    # handle greeting
-    if GREETINGS_LIST.search(question.strip()):
+    # handle greeting - only if it's JUST a greeting
+    question_check = re.sub(r'[!?.,:;]+', '', question.strip().lower())
+    words = question_check.split()
+    greeting_words = {'hi', 'hello', 'hey', 'hii', 'sup', 'what\'s', 'up', 'whats', 'there'}
+    
+    if len(words) <= 3 and all(word in greeting_words for word in words):
         return {"reply": "Hi! I'm QChat. Ask me anything about Quinnipiac!", "sources": []}
 
     try:
