@@ -1,17 +1,13 @@
-# ollama to make the gemma model
-import azure.functions as func
-import json, os
-
-from .RAG import answer_with_rag
+# for rag and filter
+import re
+from .RAG import build_index, retrieve
+from .profanity_filter import sanitize_text
+# for llm
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_ollama import ChatOllama
 # FAQ matcher import
 from .faq_matcher import check_faq_by_keywords
-# Profile service import
-from .profile_service import ensure_profile_exists, get_user_profile
-# Smart profile extractor
-from .smart_profile_extractor import extract_profile_info_from_conversation, apply_extracted_info_to_profile
-# Personal question handler
-from .personal_qa import try_answer_personal_question
-
+# other imports
 import azure.functions as func
 import json, os
 from datetime import datetime
@@ -37,8 +33,43 @@ _db_checked = False
 _db_ready = False
 _db_error = None
 
-# Collections
-CONVERSATIONS_COLLECTION = 'conversations'
+# intialize llm model
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")
+_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
+_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "256"))
+llm = ChatOllama(
+    model=OLLAMA_MODEL,
+    base_url=OLLAMA_URL,
+    temperature=0,
+    num_ctx=_NUM_CTX,
+    model_kwargs={"num_predict": _NUM_PREDICT},
+)
+
+# prompt to only use given context
+prompt_template = ChatPromptTemplate.from_messages([
+    ("system",
+     "You are QChat, a helpful assistant for Quinnipiac University.\n"
+     "Your job is to answer using ONLY the provided context.\n\n"
+     "RULES:\n"
+     "- If the answer is in the context → answer clearly and concisely.\n"
+     "- If the question is a greeting (hi, hello, hey, etc.) → respond friendly and invite a real question.\n"
+     "- If the answer is NOT in the context and NOT a greeting → say: 'I don't know. Try asking about dining, housing, athletics, or MyQ.'\n"
+     "- NEVER make up information.\n"
+     "- ALWAYS be helpful and positive.\n"
+     "- NEVER make up or modify the links given, provide the exact link without any adjustments.\n"
+     "- assume the student is an undergraduate living on Mount Carmel, unless otherwise told. \n"
+     "Formatting rules:\n"
+     "- Use short paragraphs\n"
+     "- Use bullet points for lists\n"
+     "- Use headings when appropriate\n"
+     "- Do NOT return one long block of text\n"
+     "- Preserve line breaks\n"
+     "- When there is a numbered list seperate each number with a new line\n"
+     "- Do not include empty parentheses\n"
+     "- Do not include citations or URLs inside the answer. I will display sources separately."),
+    ("human", "Context:\n{context}\n\nUser: {question}")
+])
 
 
 # intiialize database connnection
@@ -76,6 +107,57 @@ def _init_db_once():
         db = None
         _db_ready = False
         _db_error = repr(e)
+
+# to format the response to be more readable
+def format_reply(text: str) -> str:
+    if not text:
+        return text
+    t = text.strip().replace("\r\n", "\n").replace("\r", "\n")
+
+    # ensure headings start on their own line
+    t = re.sub(r"\s*(\*\*[^*\n]{2,80}\*\*:)\s*", r"\n\n\1\n", t)
+    # put bullets on their own lines (handles "- ", "• ", "* ")
+    t = re.sub(r"\s+(-\s+)", r"\n- ", t)
+    t = re.sub(r"\s+(•\s+)", r"\n• ", t)
+    t = re.sub(r"\s+(\*\s+)", r"\n* ", t)
+    # if a bullet is glued to a heading like "**X:** - item", split it
+    t = re.sub(r"(\*\*[^*\n]{2,80}\*\*:)\s*-\s*", r"\1\n- ", t)
+    # keep numbered items clean 
+    t = re.sub(r"\s+(\d+\.)\s+", r"\n\1 ", t)
+    # collapse too many blank lines
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    # return cleaned version
+    return t.strip()
+
+# to answer with rag
+def answer_with_rag(question: str) -> dict:
+    docs = retrieve(question, k=6)
+    # failure to retrieve docs
+    if not docs:
+        return {
+            "reply": "I don't know, not in the provided resources",
+            "sources": [],
+        }
+    # build context
+    context = "\n\n".join(f"[Source: {d.metadata.get('source','')}]\n{d.page_content}"
+        for d in docs
+    )
+    # sources list, deduplicate and preserve order
+    sources = []
+    seen = set()
+    for d in docs:
+        s = d.metadata.get("source")
+        if s and s not in seen:
+            sources.append(s)
+            seen.add(s)
+    #get reply
+    reply_text = llm.invoke(
+        prompt_template.invoke({"context": context, "question": question})
+    ).content.strip()
+    reply_text = sanitize_text(reply_text)
+    reply_text = format_reply(reply_text)
+    # retrun reply
+    return{"reply": reply_text, "sources": sources[:5]}
 
 
 def _get_recent_conversation_history(username: str, limit: int = 10) -> list:
