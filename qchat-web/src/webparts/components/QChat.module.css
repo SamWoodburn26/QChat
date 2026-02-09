@@ -1,13 +1,15 @@
 /* Removed SCSS @import – you'll handle any global styles separately */
 
+/* COLORS navy: #0C2340, gold: #FFB81C, light blue: #418FDE */
+
 /* Main QChat container */
 .qChat {
     overflow: hidden;
-    padding: 1em;
+    padding: 0em;
     /* Fallback color, then CSS variable if defined */
     color: #323130;
     color: var(--bodyText, #323130);
-    width: 100%
+    width: 100%;
   }
   
   /* QChat in "teams" mode */
@@ -30,14 +32,14 @@
   /* Links inside .links */
   .links a {
     text-decoration: none;
-    color: #03787c;
-    color: var(--link, #03787c); /* fallback then CSS variable */
+    color: #418FDE;
+    color: var(--link, #418FDE); /* fallback then CSS variable */
   }
   
   /* Hover state for links */
   .links a:hover {
     text-decoration: underline;
-    color: #014446;
+    color: #FFB81C;
     color: var(--linkHovered, #014446);
   }
   
@@ -48,13 +50,14 @@
         rgba(255, 255, 255, 0.6),
         rgba(255, 255, 255, 0.6)
       ),
-      url('../assets/Quinnipiac_University-442438439.png');
-    background-size: cover;
+      /* url('../assets/Quinnipiac_University-442438439.png'); */
+      url('../assets/cceImage.png');
+    background-size:cover;
     background-position: center;
     background-repeat: no-repeat;
-    padding: 18px;
     border-radius: 8px;
   }
+  
 
   .tmImg{
     margin-bottom: 20px;
@@ -62,6 +65,84 @@
   }
 
   .bobcatImage{
-    margin-left: 1000px;
+    margin-left: 950px;
+  }
+
+  .titleLogo{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    /* move slightly left */
+    margin-left: -60px; /* tweak this value */
+  }
+
+  .helpButton {
+    padding: 8px 10px;
+    border-radius: 8px;
+    background-color: #418fde;
+    color: white;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+  }
+  .helpButton:hover {
+    background-color: #247bd3;
+  } 
+  .helpButton:active {
+    transform: scale(0.97);
+  }
+
+  .historyButton{
+    padding: 7px 10px;
+    border-radius: 8;
+    background-color: #418fde;
+  }
+  .historyButton:hover {
+    background-color: #247bd3;
+  }
+  .historyButton:active {
+    transform: scale(0.97);
   }
   
+  .sendButton{
+    padding: 10px 16px;
+    border-radius: 10;
+    background-color: #418fde;
+  }
+  .sendButton:hover {
+    background-color: #247bd3;
+  }
+  .sendButton:active {
+    transform: scale(0.97);
+  }
+
+  .loginButton{
+    padding: 6px 25px;
+    border-radius: 8;
+    background: #FFB81C;
+    color: 'white';
+    border: 'none';
+    cursor: 'pointer';
+  }
+  .loginButton:hover {
+    background-color: #c38705;
+  }
+
+  .hideTipsButton{
+    padding: 6px 10px;
+    border-radius: 8;
+    background: #0C2340;
+  }
+
+  .spinner{
+    width: 14px;
+    height: 14px;
+    border: 2px solid rgba(0,0,0,0.2);
+    border-top-color: rgba(0,0,0,0.7);
+    border-radius: 50%;
+    display: inline-block;
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
