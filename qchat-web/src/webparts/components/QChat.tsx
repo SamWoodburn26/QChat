@@ -15,6 +15,15 @@ type Conversation = { id: string; title: string; messages: Msg[]; created: strin
 // Backend API base URL
 const llm_base = localSettings.Values.SERVER_URL || 'http://localhost:7071';
 
+function linkifyText(text: string): string {
+  const urlRegex = /(https?:\/\/[^\s<>]+)/g;
+  return text.replace(urlRegex, (url) => {
+    const cleanUrl = url.replace(/[.,;:!?]+$/, ''); // Sondaki noktalama işaretlerini temizle
+    return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" style="color: #0078D4; text-decoration: underline;">${cleanUrl}</a>`;
+  });
+}
+
+
 export default function QChat() {
   // Add error boundary
   const [hasError, setHasError] = React.useState(false);
@@ -486,7 +495,7 @@ export default function QChat() {
               margin: '6px 0'
             }}>
               <strong>{m.role === 'assistant' ? 'qChat' : 'You'}: </strong>
-              <span dangerouslySetInnerHTML={{ __html: m.text }} />
+              <span dangerouslySetInnerHTML={{ __html: linkifyText(m.text) }} />
             </div>
           ))}
           <div ref={messagesEndRef} />

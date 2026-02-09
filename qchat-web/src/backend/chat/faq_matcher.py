@@ -13,7 +13,6 @@ STRONG_CONTEXT_COUNT = 2     # Number of context matches needed for bonus
 
 # Minimum score: at least 1 core + 1 context (more robust)
 MINIMUM_SCORE_THRESHOLD = 6
-#CORE_WEIGHT + CONTEXT_WEIGHT  # = 5
 
 
 def keyword_in_msg(keyword: str, message: str) -> bool:
