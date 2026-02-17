@@ -8,7 +8,8 @@ import hashlib
 
 # MongoDB Configuration
 MONGO_URI = os.environ.get('MONGODB_URI') or os.getenv('MONGODB_URI')
-DATABASE_NAME = os.environ.get('DB_NAME', 'qchat')
+#DATABASE_NAME = os.environ.get('DB_NAME', 'qchat')
+DATABASE_NAME = os.environ.get('DB_NAME', 'chatbot_db')
 USERS_COLLECTION = 'users'
 
 # MongoDB client (global)
@@ -109,9 +110,14 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     {"username": username},
                     {"$set": {"lastLogin": datetime.utcnow()}}
                 )
+                role = user.get("role", "student")
+                name = user.get("name", username)
+
                 result = {
                     "success": True,
                     "username": username,
+                    "name": name,
+                    "role":role,
                     "message": "Login successful"
                 }
             else:
@@ -134,12 +140,14 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 users_collection.insert_one({
                     "username": username,
                     "password": _hash_password(password),
+                    "role":"student",
                     "createdAt": datetime.utcnow(),
                     "lastLogin": datetime.utcnow()
                 })
                 result = {
                     "success": True,
                     "username": username,
+                    "role":"student",
                     "message": "Registration successful"
                 }
         
@@ -156,12 +164,15 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     {"username": username},
                     {"$set": {"lastLogin": datetime.utcnow()}}
                 )
+                role = existing.get("role","student")
             else:
                 # Create new user for Microsoft account (no password)
+                role = "student"
                 users_collection.insert_one({
                     "username": username,
                     "name": name,
                     "authProvider": "microsoft",
+                    "role":role,
                     "createdAt": datetime.utcnow(),
                     "lastLogin": datetime.utcnow()
                 })
@@ -170,6 +181,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "success": True,
                 "username": username,
                 "name": name,
+                "role":role,
                 "message": "Microsoft login successful"
             }
         
@@ -186,12 +198,15 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     {"username": username},
                     {"$set": {"lastLogin": datetime.utcnow()}}
                 )
+                role = existing.get("role","student")
             else:
                 # Create new user for Google account (no password)
+                role="student"
                 users_collection.insert_one({
                     "username": username,
                     "name": name,
                     "authProvider": "google",
+                    "role":role,
                     "createdAt": datetime.utcnow(),
                     "lastLogin": datetime.utcnow()
                 })
@@ -200,6 +215,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "success": True,
                 "username": username,
                 "name": name,
+                "role":role,
                 "message": "Google login successful"
             }
         

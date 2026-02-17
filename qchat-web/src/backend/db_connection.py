@@ -45,3 +45,19 @@ class Database:
 # Singleton instance
 db = Database()
 
+# USER SERVICE SETUP
+from services.user_service import UserService
+
+# Get MongoDB database instance
+_db_instance = db.connect()
+
+# Get users collection
+users_collection = _db_instance["users"]
+
+# Initialize user service
+user_service = UserService(users_collection)
+
+# Export for use in Azure Functions
+__all__ = ['db', 'user_service', 'users_collection']
+
+print("User service initialized")

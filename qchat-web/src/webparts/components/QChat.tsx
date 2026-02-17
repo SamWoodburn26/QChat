@@ -18,20 +18,19 @@ const llm_base = localSettings.Values.SERVER_URL || 'http://localhost:7071';
 function linkifyText(text: string): string {
   const urlRegex = /(https?:\/\/[^\s<>]+)/g;
   return text.replace(urlRegex, (url) => {
-    const cleanUrl = url.replace(/[.,;:!?]+$/, ''); // Sondaki noktalama işaretlerini temizle
+    const cleanUrl = url.replace(/[.,;:!?]+$/, '');
     return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" style="color: #0078D4; text-decoration: underline;">${cleanUrl}</a>`;
   });
 }
 
 
 export default function QChat() {
-  // Add error boundary
   const [hasError, setHasError] = React.useState(false);
-  
-  // Ref for auto-scrolling to latest message
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
-
   const [isLoading, setIsLoading] = React.useState(false);
+  
+  //  Track if user is admin
+  const [isAdmin, setIsAdmin] = React.useState(false);
   
   React.useEffect(() => {
     console.log('QChat component mounted');
@@ -41,12 +40,10 @@ export default function QChat() {
     return <div style={{ padding: 20, color: 'red' }}>Error loading QChat</div>;
   }
 
-  // Visible messages in the active conversation (or in-progress messages before save)
   const [msgs, setMsgs] = React.useState<Msg[]>([
     { role: 'assistant', text: 'Hi! Ask me about MyQ resources.' }
   ]);
 
-  // Auto-scroll to bottom when messages change
   React.useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [msgs]);
@@ -58,40 +55,36 @@ export default function QChat() {
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [loginOpen, setLoginOpen] = React.useState(false);
 
-  // Login state: no localStorage, managed via MongoDB
   const [currentUser, setCurrentUser] = React.useState<string | null>(null);
-
-  // Keep conversations in state, loaded from MongoDB
   const [history, setHistory] = React.useState<Conversation[]>([]);
-
-  // current conversation id (null = in-progress new conversation)
   const [currentConvId, setCurrentConvId] = React.useState<string | null>(null);
 
-  /*
-    onSend: called when user submits the input form.
+  //  Check admin status on mount and when currentUser changes
+  React.useEffect(() => {
+    // Only set admin if user is logged in AND has admin role
+    if (currentUser) {
+      const role = localStorage.getItem('role');
+      setIsAdmin(role === 'admin');
+    } else {
+      setIsAdmin(false);
+    }
+  }, [currentUser]);
 
-    - Adds the message to the visible `msgs`.
-    - If no `currentConvId` exists, we create a new Conversation entry and persist it.
-    - Otherwise we append the new message to the matching Conversation in `history` and persist.
-  */
   async function onSend(e?: React.FormEvent) {
     e?.preventDefault();
     if (!input.trim()) return;
     const msg = input.trim();
 
     const user = { role: 'user' as const, text: input.trim() };
-    // Add to the UI immediately (optimistic update). Replies from the assistant would be appended later.
     setMsgs(m => [...m, user]);
-    setInput(''); // Reset textbox immediately
+    setInput('');
 
-    // Ensure there is a session id for this conversation before calling backend
     let sessionId = currentConvId;
     if (!sessionId) {
       sessionId = 'session_' + Date.now().toString(36) + Math.random().toString(36).substring(2);
       setCurrentConvId(sessionId);
     }
 
-    // set is loadinh to true
     setIsLoading(true); 
 
     try {
@@ -105,15 +98,11 @@ export default function QChat() {
         throw new Error(`HTTP ${result.status}`);
       }
 
-      // const data = await result.json();
-      // const assistantText = data.response ?? '(no reply)';
-      // const assistant: Msg = {role: 'assistant', text: assistantText};
       const data = await result.json();
       const reply = data.reply || '(no reply)';
       const sources: string[] = Array.isArray(data.sources) ? data.sources : [];
 
       let text = reply;
-      // convert new lines to <br> for better formatting
       text = text.replace(/\n/g, '<br>');
       if (sources.length > 0) {
         const top_two = sources.slice(0, 2);
@@ -124,9 +113,7 @@ export default function QChat() {
       const assistant: Msg = { role: 'assistant', text };
       setMsgs(m => [...m, assistant]);
 
-      // Persist conversation state to history
       if (!currentConvId) {
-        // First user message in a new conversation -> create a new Conversation object.
         const title = user.text.slice(0, 60);
         const conv: Conversation = {
           id: sessionId,
@@ -135,24 +122,19 @@ export default function QChat() {
           created: new Date().toISOString()
         };
 
-        // Prepend to history (newest first) and cap to 50 items
         const newHist = [conv, ...history].slice(0, 50);
         setHistory(newHist);
-        // Save to MongoDB for current user
         if (currentUser) {
           await saveConversationToDb(currentUser, conv);
         }
-        // Update current conversation ID so future messages append to this conversation
         setCurrentConvId(sessionId);
       } else {
-        // Append to an existing conversation object in history
         const updated = history.map(h =>
           h.id === sessionId
             ? { ...h, messages: [...h.messages, user, assistant] }
             : h
         );
         setHistory(updated);
-        // Save to MongoDB for current user
         if (currentUser) {
           const updatedConv = updated.find(h => h.id === sessionId);
           if (updatedConv) {
@@ -170,14 +152,11 @@ export default function QChat() {
     }
   }
 
-  // Parent handler passed to the ChatHistoryPanel: replace visible messages with the selected conversation's messages.
   function handleLoadConversation(conv: Conversation) {
     setMsgs(conv.messages);
-    // Mark this conversation as the current one so subsequent sends append to it.
     setCurrentConvId(conv.id);
   }
 
-  // Helper function to save conversation to MongoDB
   async function saveConversationToDb(username: string, conversation: Conversation) {
     try {
       await fetch(`${llm_base}/api/history`, {
@@ -194,7 +173,6 @@ export default function QChat() {
     }
   }
 
-  // Helper function to load conversations from MongoDB
   async function loadConversationsFromDb(username: string) {
     try {
       const response = await fetch(`${llm_base}/api/history?username=${encodeURIComponent(username)}`);
@@ -207,7 +185,6 @@ export default function QChat() {
     }
   }
 
-  // Login handlers
   async function handleLogin(username: string, password: string) {
     try {
       const response = await fetch(`${llm_base}/api/auth`, {
@@ -224,7 +201,11 @@ export default function QChat() {
       
       if (data.success) {
         setCurrentUser(username);
-        // Load this user's chat history from MongoDB
+        localStorage.setItem('username', data.username);
+        localStorage.setItem('name', data.name || username);
+        localStorage.setItem('role', data.role);
+        setIsAdmin(data.role === 'admin'); //  Update admin state
+        
         await loadConversationsFromDb(username);
         setLoginOpen(false);
       } else {
@@ -251,8 +232,11 @@ export default function QChat() {
       const data = await response.json();
       
       if (data.success) {
-        // Auto-login after successful registration
         setCurrentUser(username);
+        localStorage.setItem('username', data.username);
+        localStorage.setItem('role', data.role);
+        setIsAdmin(data.role === 'admin'); //  Update admin state
+        
         await loadConversationsFromDb(username);
         setLoginOpen(false);
       } else {
@@ -267,10 +251,12 @@ export default function QChat() {
   function handleLogout() {
     setCurrentUser(null);
     
-    // Clear history from view
-    setHistory([]);
+    localStorage.removeItem('username');
+    localStorage.removeItem('name');
+    localStorage.removeItem('role');
+    setIsAdmin(false); //  Clear admin state
     
-    // Reset current conversation
+    setHistory([]);
     setCurrentConvId(null);
     setMsgs([{ role: 'assistant', text: 'Hi! Ask me about MyQ resources.' }]);
     
@@ -278,8 +264,7 @@ export default function QChat() {
   }
 
   function handleMicrosoftLogin() {
-    // Microsoft OAuth configuration
-    const clientId = 'YOUR_MICROSOFT_CLIENT_ID'; // Replace with your Azure AD app client ID
+    const clientId = 'YOUR_MICROSOFT_CLIENT_ID';
     const redirectUri = encodeURIComponent(window.location.origin);
     const scope = encodeURIComponent('openid profile email');
     const responseType = 'id_token';
@@ -293,10 +278,8 @@ export default function QChat() {
       `&response_mode=fragment` +
       `&nonce=${nonce}`;
     
-    // Open popup for Microsoft login
     const popup = window.open(authUrl, 'Microsoft Login', 'width=500,height=600');
     
-    // Listen for the redirect callback
     window.addEventListener('message', async (event) => {
       if (event.origin !== window.location.origin) return;
       
@@ -320,6 +303,11 @@ export default function QChat() {
           
           if (data.success) {
             setCurrentUser(name || email);
+            localStorage.setItem('username', data.username);
+            localStorage.setItem('name', data.name);
+            localStorage.setItem('role', data.role);
+            setIsAdmin(data.role === 'admin'); // Update admin state
+            
             await loadConversationsFromDb(email);
             setLoginOpen(false);
           } else {
@@ -334,7 +322,6 @@ export default function QChat() {
   }
 
   function handleGoogleLogin() {
-    // Google OAuth configuration
     const clientId = '590552919397-6bp7ppthi11rgoiiehrj0jvi0apf3ltm.apps.googleusercontent.com';
     const redirectUri = encodeURIComponent(window.location.origin + '/google-callback.html');
     const scope = encodeURIComponent('openid profile email');
@@ -348,10 +335,8 @@ export default function QChat() {
       `&scope=${scope}` +
       `&nonce=${nonce}`;
     
-    // Open popup for Google login
     const popup = window.open(authUrl, 'Google Login', 'width=500,height=600');
     
-    // Listen for the redirect callback
     const messageHandler = async (event: MessageEvent) => {
       if (event.origin !== window.location.origin) return;
       
@@ -376,6 +361,11 @@ export default function QChat() {
           
           if (data.success) {
             setCurrentUser(name || email);
+            localStorage.setItem('username', data.username);
+            localStorage.setItem('name', data.name);
+            localStorage.setItem('role', data.role);
+            setIsAdmin(data.role === 'admin'); //  Update admin state
+            
             await loadConversationsFromDb(email);
             setLoginOpen(false);
           } else {
@@ -398,14 +388,12 @@ export default function QChat() {
   return (
     <div style={{ fontFamily: 'Segoe UI, system-ui', width: "100dvw", height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {showHelpTab && <HelpTab onClose={() => setShowHelpTab(false)} />}
-      {/* History panel is controlled (open/close) by this component */}
       <ChatHistoryPanel
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
         history={history}
         onLoad={handleLoadConversation}
       />
-      {/* Login dropdown */}
       <LoginDropdown
         open={loginOpen}
         onClose={() => setLoginOpen(false)}
@@ -425,7 +413,6 @@ export default function QChat() {
         justifyContent: 'space-between',
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-          {/* Toggle history panel */}
           <button
             className={styles.historyButton}
             onClick={() => setHistoryOpen(v => !v)}
@@ -439,11 +426,32 @@ export default function QChat() {
             Help
           </button>
           <button
-          className={styles.loginButton}
+            className={styles.loginButton}
             onClick={() => setLoginOpen(v => !v)}
           >
-            {currentUser ? `👤 ${currentUser}` : '👤 Login'}
+            {currentUser ? ` ${currentUser}` : ' Login'}
           </button>
+          
+          {/*  Admin Panel Button - Only shown for logged-in admins */}
+          {currentUser && isAdmin && (
+            <button
+              className={styles.adminButton}
+              onClick={() => alert('Admin Panel - Coming Soon!')}
+              style={{
+                background: '#FFB81C',
+                color: 'white',
+                border: 'none',
+                padding: '8px 16px',
+                borderRadius: '6px',
+                fontWeight: 600,
+                cursor: 'pointer',
+                transition: 'all 0.3s ease',
+              }}
+            >
+              Admin Panel
+            </button>
+          )}
+          
           <div className={styles.titleLogo}>
             <img className={styles.bobcatImage} src={bobcatImage} width={100} height={100} alt="Bobcat mascot" />
             <div style={{fontWeight: 700, fontSize: 34, lineHeight: 1, marginRight: 6}}>QCHAT</div>
