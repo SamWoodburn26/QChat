@@ -411,15 +411,8 @@ export default function QChat() {
         onGoogleLogin={handleGoogleLogin}
         onLogout={handleLogout}
       />
-      <div style={{
-        background: '#0C2340',
-        color: 'white',
-        padding: '0px 14px',
-        borderRadius: 6,
-        display: 'flex',
-        justifyContent: 'space-between',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <div className={styles.headerBar}>
+        <div className={styles.headerLeft}>
           <button
             className={styles.historyButton}
             onClick={() => setHistoryOpen(v => !v)}
@@ -432,34 +425,22 @@ export default function QChat() {
           >
             Help
           </button>
-          
           <button
             className={styles.loginButton}
             onClick={() => setLoginOpen(v => !v)}
           >
             {currentUser ? ` ${currentUser}` : ' Login'}
           </button>
-          
-          {/*  Admin Panel Button - Only shown for logged-in admins */}
           {currentUser && isAdmin && (
             <button
               className={styles.adminButton}
               onClick={() => setShowAdminPanel(true)}
-              style={{
-                background: '#FFB81C',
-                color: 'white',
-                border: 'none',
-                padding: '8px 16px',
-                borderRadius: '6px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-              }}
             >
               Admin Panel
             </button>
           )}
-          
+        </div>
+        <div className={styles.headerRight}>
           <div className={styles.titleLogo}>
             <img className={styles.bobcatImage} src={bobcatImage} width={100} height={100} alt="Bobcat mascot" />
             <div style={{fontWeight: 700, fontSize: 34, lineHeight: 1, marginRight: 6}}>QCHAT</div>

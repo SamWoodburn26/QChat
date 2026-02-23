@@ -1,112 +1,170 @@
-/* Matches QChat colors: navy #0C2340, gold #FFB81C, light blue #418FDE */
-
 .overlay {
   position: fixed;
   inset: 0;
-  background: rgba(12, 35, 64, 0.6);
-  z-index: 1000;
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
+  align-items: center;
   justify-content: center;
-  align-items: flex-start;
-  padding: 60px 24px 24px;
-  box-sizing: border-box;
+  z-index: 1000;
 }
 
 .panel {
-  width: 100%;
-  max-width: 720px;
-  max-height: calc(100vh - 100px);
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  max-width: 640px;
+  width: 90%;
+  max-height: 85vh;
   display: flex;
   flex-direction: column;
-  background: #0C2340;
-  color: #fff;
-  border-radius: 12px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
-  border: 1px solid rgba(255, 184, 28, 0.3);
 }
 
 .header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  padding: 14px 16px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
-  flex-shrink: 0;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e0e0e0;
 }
 
 .title {
   margin: 0;
   font-size: 1.25rem;
-  font-weight: 700;
-  color: #FFB81C;
+  color: #0C2340;
 }
 
-.closeBtn {
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  color: #fff;
-  padding: 6px 12px;
-  border-radius: 8px;
+.closeButton {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  line-height: 1;
   cursor: pointer;
-  font-size: 0.875rem;
-  transition: background 0.2s, border-color 0.2s;
+  color: #666;
+  padding: 4px 8px;
 }
 
-.closeBtn:hover {
-  background: rgba(255, 255, 255, 0.1);
-  border-color: #FFB81C;
+.closeButton:hover {
+  color: #0C2340;
 }
 
-.body {
-  padding: 16px;
-  overflow-y: auto;
-  flex: 1;
-  min-height: 0;
+.error {
+  padding: 12px 20px;
+  background: #fdecea;
+  color: #a4262c;
+  font-size: 0.9rem;
 }
 
-.subtitle {
-  margin: 0 0 12px;
-  font-size: 0.875rem;
-  color: rgba(255, 255, 255, 0.75);
+.loading {
+  padding: 24px 20px;
+  color: #666;
+}
+
+.toolbar {
+  padding: 12px 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid #eee;
+}
+
+.primaryButton {
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: #418fde;
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: #247bd3;
+}
+
+.primaryButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.secondaryButton {
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: #f3f2f1;
+  color: #323130;
+  border: 1px solid #e0e0e0;
+  cursor: pointer;
+}
+
+.secondaryButton:hover:not(:disabled) {
+  background: #e8e8e8;
+}
+
+.addRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.input {
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  min-width: 200px;
+  font-size: 0.95rem;
 }
 
 .list {
   list-style: none;
   margin: 0;
-  padding: 0;
+  padding: 12px 20px;
+  overflow-y: auto;
+  flex: 1;
 }
 
-.item {
-  margin-bottom: 8px;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.06);
-  border-radius: 8px;
-  border-left: 3px solid #418FDE;
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.row:last-child {
+  border-bottom: none;
 }
 
 .link {
-  color: #418FDE;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #0078D4;
   text-decoration: none;
-  font-size: 0.9rem;
-  word-break: break-all;
 }
 
 .link:hover {
   text-decoration: underline;
-  color: #FFB81C;
 }
 
-.loading {
-  color: rgba(255, 255, 255, 0.7);
-  padding: 16px 0;
+.removeButton {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #fdecea;
+  color: #a4262c;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  flex-shrink: 0;
 }
 
-.error {
-  color: #e0a0a0;
-  padding: 16px 0;
+.removeButton:hover:not(:disabled) {
+  background: #f1b4b4;
 }
 
-.empty {
-  color: rgba(255, 255, 255, 0.6);
-  padding: 16px 0;
+.removeButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
 }
