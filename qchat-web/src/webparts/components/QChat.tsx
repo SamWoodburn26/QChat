@@ -4,6 +4,7 @@ import ChatHistoryPanel from './ChatHistoryPanel.tsx';
 import HelpTab from './HelpTab.tsx';
 import HelpBubbles from './HelpBubbles.tsx';
 import LoginDropdown from './LoginDropdown.tsx';
+import AdminPanel from './AdminPanel.tsx';
 import styles from './QChat.module.css';
 import TMImage from '../assets/TM.png';
 import bobcatImage from '../assets/Bobcat.png';
@@ -51,6 +52,7 @@ export default function QChat() {
   const [input, setInput] = React.useState('');
   const [showPage, setShowPage] = React.useState(false);
   const [showHelpTab, setShowHelpTab] = React.useState(false);
+  const [showAdminPanel, setShowAdminPanel] = React.useState(false);
   const [showTips, setShowTips] = React.useState(true);
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [loginOpen, setLoginOpen] = React.useState(false);
@@ -388,6 +390,9 @@ export default function QChat() {
   return (
     <div style={{ fontFamily: 'Segoe UI, system-ui', width: "100dvw", height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {showHelpTab && <HelpTab onClose={() => setShowHelpTab(false)} />}
+      {showAdminPanel && (
+        <AdminPanel onClose={() => setShowAdminPanel(false)} />
+      )}
       <ChatHistoryPanel
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
@@ -436,7 +441,7 @@ export default function QChat() {
           {currentUser && isAdmin && (
             <button
               className={styles.adminButton}
-              onClick={() => alert('Admin Panel - Coming Soon!')}
+              onClick={() => setShowAdminPanel(true)}
               style={{
                 background: '#FFB81C',
                 color: 'white',

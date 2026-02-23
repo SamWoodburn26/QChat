@@ -128,6 +128,21 @@
     background-color: #c38705;
   }
 
+  .adminButton {
+    padding: 6px 16px;
+    border-radius: 8px;
+    background: #FFB81C;
+    color: #0C2340;
+    border: none;
+    cursor: pointer;
+    font-weight: 600;
+    transition: background 0.2s;
+  }
+  .adminButton:hover {
+    background-color: #c38705;
+    color: white;
+  }
+
   .hideTipsButton{
     padding: 6px 10px;
     border-radius: 8;
