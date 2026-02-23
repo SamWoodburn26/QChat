@@ -1,16 +1,42 @@
+import styles from './HelpTab.module.css';
 
 export default function HelpTab(props: { onClose?: () => void }) {
   return (
-    <div style={{ padding: 18 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <h2 style={{ margin: 0 }}>Help</h2>
-        {props.onClose && (
-          <button onClick={props.onClose} style={{ padding: '6px 10px', borderRadius: 8 }}>Close Tab</button>
-        )}
-      </div>
-
-      <div style={{ marginTop: 18, padding: 12, border: '1px dashed #ccc', borderRadius: 8 }}>
-        <p style={{ margin: 0, fontSize: 16 }}>Placeholder</p>
+    <div
+      className={styles.overlay}
+      onClick={(e) => {
+        if (e.target === e.currentTarget && props.onClose) props.onClose();
+      }}
+      role="dialog"
+      aria-labelledby="help-title"
+      aria-modal="true"
+    >
+      <div className={styles.popup} onClick={(e) => e.stopPropagation()}>
+        <div className={styles.header}>
+          <h2 id="help-title" className={styles.title}>About QChat</h2>
+          {props.onClose && (
+            <button
+              type="button"
+              className={styles.closeBtn}
+              onClick={props.onClose}
+              aria-label="Close help"
+            >
+              Close
+            </button>
+          )}
+        </div>
+        <div className={styles.body}>
+          <p>
+            <strong>QChat</strong> is Quinnipiac University’s assistant. Use it to get quick answers about campus life, MyQ, dining, housing, events, and more.
+          </p>
+          <p className={styles.sectionTitle}>How to use it</p>
+          <p>
+            Type your question in the box at the bottom and press Send (or Enter). You can ask about upcoming events, today or next week, or things like “What’s for dinner?” or “How do I reset my password?”
+          </p>
+          <p>
+            Use <strong>History</strong> to open past conversations and <strong>Show Tips</strong> for suggested questions.
+          </p>
+        </div>
       </div>
     </div>
   );

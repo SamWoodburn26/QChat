@@ -1,0 +1,96 @@
+/* Matches QChat colors: navy #0C2340, gold #FFB81C, light blue #418FDE */
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(12, 35, 64, 0.5);
+  z-index: 1000;
+  display: flex;
+  justify-content: center;
+  padding-top: 60px;
+  padding-left: 16px;
+  padding-right: 16px;
+  box-sizing: border-box;
+}
+
+.popup {
+  width: 100%;
+  max-width: 420px;
+  max-height: calc(100vh - 100px);
+  overflow-y: auto;
+  background: #0C2340;
+  color: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(255, 184, 28, 0.3);
+}
+
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  color: #FFB81C;
+}
+
+.closeBtn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  color: #fff;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.875rem;
+  transition: background 0.2s, border-color 0.2s;
+}
+
+.closeBtn:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: #FFB81C;
+}
+
+.body {
+  padding: 16px;
+  font-size: 0.9375rem;
+  line-height: 1.5;
+}
+
+.body p {
+  margin: 0 0 12px;
+  color: rgba(255, 255, 255, 0.9);
+}
+
+.body p:last-child {
+  margin-bottom: 0;
+}
+
+.body strong {
+  color: #FFB81C;
+}
+
+.body a {
+  color: #418FDE;
+  text-decoration: none;
+}
+
+.body a:hover {
+  text-decoration: underline;
+}
+
+.sectionTitle {
+  margin: 14px 0 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #FFB81C;
+}
+
+.sectionTitle:first-of-type {
+  margin-top: 0;
+}
