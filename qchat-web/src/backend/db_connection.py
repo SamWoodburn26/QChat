@@ -24,7 +24,9 @@ class Database:
             if mongodb_uri.startswith('mongodb+srv') or 'mongodb.net' in mongodb_uri:
                 kwargs['tls'] = True
                 kwargs['tlsCAFile'] = certifi.where()
-                kwargs['serverSelectionTimeoutMS'] = 4000
+                kwargs['serverSelectionTimeoutMS'] = 30000
+                kwargs['connectTimeoutMS'] = 30000
+                kwargs['retryWrites'] = True
             self._client = MongoClient(mongodb_uri, **kwargs)
             # Actively verify connectivity to avoid lazy failures later
             try:

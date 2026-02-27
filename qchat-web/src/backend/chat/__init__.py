@@ -46,14 +46,15 @@ def _init_db_once():
         return
     try:
         mongo_kwargs = {
-            "serverSelectionTimeoutMS": 3000,
-            "connectTimeoutMS": 3000,
-            "socketTimeoutMS": 3000,
+            "serverSelectionTimeoutMS": 30000,
+            "connectTimeoutMS": 30000,
+            "socketTimeoutMS": 30000,
         }
         if MONGO_URI.startswith("mongodb+srv") or "mongodb.net" in MONGO_URI:
             # Atlas requires TLS
             mongo_kwargs["tls"] = True
             mongo_kwargs["tlsCAFile"] = certifi.where()
+            mongo_kwargs["retryWrites"] = True
         mc = MongoClient(MONGO_URI, **mongo_kwargs)
         # Ping to verify connectivity
         mc.admin.command("ping")

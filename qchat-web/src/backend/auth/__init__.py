@@ -22,13 +22,14 @@ def _init_db():
     if mongo_client is None and MONGO_URI:
         try:
             mongo_kwargs = {
-                "serverSelectionTimeoutMS": 3000,
-                "connectTimeoutMS": 3000,
-                "socketTimeoutMS": 3000,
+                "serverSelectionTimeoutMS": 30000,
+                "connectTimeoutMS": 30000,
+                "socketTimeoutMS": 30000,
             }
             if MONGO_URI.startswith("mongodb+srv") or "mongodb.net" in MONGO_URI:
                 mongo_kwargs["tls"] = True
                 mongo_kwargs["tlsCAFile"] = certifi.where()
+                mongo_kwargs["retryWrites"] = True
             mongo_client = MongoClient(MONGO_URI, **mongo_kwargs)
             mongo_client.admin.command("ping")
             db = mongo_client[DATABASE_NAME]
