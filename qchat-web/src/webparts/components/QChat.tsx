@@ -8,11 +8,11 @@ import styles from './QChat.module.css';
 import TMImage from '../assets/TM.png';
 import bobcatImage from '../assets/Bobcat.png';
 import localSettings from '../../backend/local.settings.json';
+import AdminPanel from './AdminPanel';
 
 type Msg = { role: 'user' | 'assistant'; text: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
 
-// Backend API base URL
 const llm_base = localSettings.Values.SERVER_URL || 'http://localhost:7071';
 
 function linkifyText(text: string): string {
@@ -23,14 +23,14 @@ function linkifyText(text: string): string {
   });
 }
 
-
 export default function QChat() {
   const [hasError, setHasError] = React.useState(false);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   
-  // ✅ NEW: Track if user is admin
+  // Admin state
   const [isAdmin, setIsAdmin] = React.useState(false);
+  const [showAdminPanel, setShowAdminPanel] = React.useState(false); 
   
   React.useEffect(() => {
     console.log('QChat component mounted');
@@ -54,14 +54,12 @@ export default function QChat() {
   const [showTips, setShowTips] = React.useState(true);
   const [historyOpen, setHistoryOpen] = React.useState(false);
   const [loginOpen, setLoginOpen] = React.useState(false);
-
   const [currentUser, setCurrentUser] = React.useState<string | null>(null);
   const [history, setHistory] = React.useState<Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = React.useState<string | null>(null);
 
-  // ✅ NEW: Check admin status on mount and when currentUser changes
+  // Check admin status when user changes
   React.useEffect(() => {
-    // Only set admin if user is logged in AND has admin role
     if (currentUser) {
       const role = localStorage.getItem('role');
       setIsAdmin(role === 'admin');
@@ -201,10 +199,11 @@ export default function QChat() {
       
       if (data.success) {
         setCurrentUser(username);
+        // Save to localStorage
         localStorage.setItem('username', data.username);
         localStorage.setItem('name', data.name || username);
         localStorage.setItem('role', data.role);
-        setIsAdmin(data.role === 'admin'); // ✅ Update admin state
+        setIsAdmin(data.role === 'admin');
         
         await loadConversationsFromDb(username);
         setLoginOpen(false);
@@ -233,9 +232,10 @@ export default function QChat() {
       
       if (data.success) {
         setCurrentUser(username);
+        // Save to localStorage
         localStorage.setItem('username', data.username);
         localStorage.setItem('role', data.role);
-        setIsAdmin(data.role === 'admin'); // ✅ Update admin state
+        setIsAdmin(data.role === 'admin');
         
         await loadConversationsFromDb(username);
         setLoginOpen(false);
@@ -251,10 +251,11 @@ export default function QChat() {
   function handleLogout() {
     setCurrentUser(null);
     
+    //  Clear localStorage
     localStorage.removeItem('username');
     localStorage.removeItem('name');
     localStorage.removeItem('role');
-    setIsAdmin(false); // ✅ Clear admin state
+    setIsAdmin(false);
     
     setHistory([]);
     setCurrentConvId(null);
@@ -306,7 +307,7 @@ export default function QChat() {
             localStorage.setItem('username', data.username);
             localStorage.setItem('name', data.name);
             localStorage.setItem('role', data.role);
-            setIsAdmin(data.role === 'admin'); // ✅ Update admin state
+            setIsAdmin(data.role === 'admin');
             
             await loadConversationsFromDb(email);
             setLoginOpen(false);
@@ -364,7 +365,7 @@ export default function QChat() {
             localStorage.setItem('username', data.username);
             localStorage.setItem('name', data.name);
             localStorage.setItem('role', data.role);
-            setIsAdmin(data.role === 'admin'); // ✅ Update admin state
+            setIsAdmin(data.role === 'admin');
             
             await loadConversationsFromDb(email);
             setLoginOpen(false);
@@ -388,6 +389,10 @@ export default function QChat() {
   return (
     <div style={{ fontFamily: 'Segoe UI, system-ui', width: "100dvw", height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
       {showHelpTab && <HelpTab onClose={() => setShowHelpTab(false)} />}
+      
+      {/* Admin Panel */}
+      {showAdminPanel && <AdminPanel onClose={() => setShowAdminPanel(false)} />}
+      
       <ChatHistoryPanel
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
@@ -432,23 +437,13 @@ export default function QChat() {
             {currentUser ? `👤 ${currentUser}` : '👤 Login'}
           </button>
           
-          {/* ✅ NEW: Admin Panel Button - Only shown for logged-in admins */}
+          {/* Admin Panel Button */}
           {currentUser && isAdmin && (
             <button
-              className={styles.adminButton}
-              onClick={() => alert('Admin Panel - Coming Soon!')}
-              style={{
-                background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-                color: 'white',
-                border: 'none',
-                padding: '8px 16px',
-                borderRadius: '6px',
-                fontWeight: 600,
-                cursor: 'pointer',
-                transition: 'all 0.3s ease',
-              }}
+              className={styles.loginButton}
+              onClick={() => setShowAdminPanel(true)}
             >
-              👑 Admin Panel
+              Admin Panel
             </button>
           )}
           
