@@ -1,0 +1,170 @@
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.panel {
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+  max-width: 640px;
+  width: 90%;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.title {
+  margin: 0;
+  font-size: 1.25rem;
+  color: #0C2340;
+}
+
+.closeButton {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+  color: #666;
+  padding: 4px 8px;
+}
+
+.closeButton:hover {
+  color: #0C2340;
+}
+
+.error {
+  padding: 12px 20px;
+  background: #fdecea;
+  color: #a4262c;
+  font-size: 0.9rem;
+}
+
+.loading {
+  padding: 24px 20px;
+  color: #666;
+}
+
+.toolbar {
+  padding: 12px 20px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  border-bottom: 1px solid #eee;
+}
+
+.primaryButton {
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: #418fde;
+  color: white;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.primaryButton:hover:not(:disabled) {
+  background: #247bd3;
+}
+
+.primaryButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}
+
+.secondaryButton {
+  padding: 8px 16px;
+  border-radius: 8px;
+  background: #f3f2f1;
+  color: #323130;
+  border: 1px solid #e0e0e0;
+  cursor: pointer;
+}
+
+.secondaryButton:hover:not(:disabled) {
+  background: #e8e8e8;
+}
+
+.addRow {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.input {
+  padding: 8px 12px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  min-width: 200px;
+  font-size: 0.95rem;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 12px 20px;
+  overflow-y: auto;
+  flex: 1;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 0;
+  border-bottom: 1px solid #f0f0f0;
+}
+
+.row:last-child {
+  border-bottom: none;
+}
+
+.link {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #0078D4;
+  text-decoration: none;
+}
+
+.link:hover {
+  text-decoration: underline;
+}
+
+.removeButton {
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: #fdecea;
+  color: #a4262c;
+  border: none;
+  cursor: pointer;
+  font-size: 0.85rem;
+  flex-shrink: 0;
+}
+
+.removeButton:hover:not(:disabled) {
+  background: #f1b4b4;
+}
+
+.removeButton:disabled {
+  opacity: 0.7;
+  cursor: not-allowed;
+}

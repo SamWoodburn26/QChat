@@ -1,5 +1,7 @@
 import os
-from pymongo import MongoClient
+
+from pymongo import MongoClient, ASCENDING
+from pymongo.errors import CollectionInvalid
 from dotenv import load_dotenv
 import certifi
 
@@ -46,4 +48,20 @@ class Database:
 
 # Singleton instance
 db = Database()
+from services.user_service import UserService
+
+# Get MongoDB database instance
+_db_instance = db.connect()
+
+# Get users collection
+users_collection = _db_instance["users"]
+
+# Initialize user service
+user_service = UserService(users_collection)
+
+# Export for use in Azure Functions
+__all__ = ['db', 'user_service', 'users_collection']
+
+print(" User service initialized")
+
 
