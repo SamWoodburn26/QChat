@@ -14,12 +14,11 @@ import re
 from typing import Optional, Dict, Any
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-from bs4 import BeautifulSoup
-import requests
 
 from .profile_service import get_user_profile
 from .faq_data import FAQ_DATA
 from .profanity_filter import sanitize_text
+from .RAG import retrieve as rag_retrieve
 
 # LLM Configuration
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
@@ -38,16 +37,6 @@ unified_llm = ChatOllama(
 
 # Greetings pattern
 GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
-
-# Load QU URLs
-QU_DOCS_PATH = os.path.join(os.path.dirname(__file__), "qu_docs.txt")
-try:
-    with open(QU_DOCS_PATH, "r", encoding="utf-8") as f:
-        QU_DOCS_URLS = [line.strip() for line in f if line.strip().startswith("http")]
-    print(f"Unified system loaded {len(QU_DOCS_URLS)} QU URLs")
-except Exception as e:
-    print(f"ERROR loading qu_docs.txt: {e}")
-    QU_DOCS_URLS = []
 
 # Unified prompt template
 unified_prompt = ChatPromptTemplate.from_messages([
@@ -270,65 +259,36 @@ def _get_faq_context(question: str) -> str:
 
 
 def _get_web_context(question: str) -> tuple[str, list]:
-    """Get relevant web content from QU sites."""
-    q_lower = question.lower()
-    candidates = []
-    
-    # Rank URLs based on question keywords
-    for url in QU_DOCS_URLS:
-        score = 0
-        url_lower = url.lower()
+    """Get relevant web content from QU sites using vector store retrieval."""
+    try:
+        # Use RAG vector store retrieval instead of real-time fetching
+        docs = rag_retrieve(question, k=3)
         
-        # Keyword matching
-        if any(k in q_lower for k in ["menu", "dining", "eat", "food"]) and "dining" in url_lower:
-            score += 10
-        if any(k in q_lower for k in ["event", "calendar", "happening"]) and "event" in url_lower:
-            score += 10
-        if any(k in q_lower for k in ["catalog", "course", "class"]) and "catalog" in url_lower:
-            score += 10
+        if not docs:
+            return "No web content retrieved.", []
         
-        # General word matching
-        for word in q_lower.split():
-            if len(word) > 3 and word in url_lower:
-                score += 2
+        # Build context from retrieved documents
+        context_parts = []
+        sources = []
         
-        if score > 0:
-            candidates.append((url, score))
-    
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    top_urls = [url for url, _ in candidates[:3]]
-    
-    if not top_urls:
-        top_urls = QU_DOCS_URLS[:2]  # Default fallback
-    
-    # Fetch content
-    context_parts = []
-    sources = []
-    headers = {"User-Agent": "QChat-Bot/1.0"}
-    
-    for url in top_urls:
-        try:
-            r = requests.get(url, timeout=8, headers=headers)
-            if r.status_code == 200:
-                soup = BeautifulSoup(r.text, "html.parser")
-                # Remove script and style elements
-                for script in soup(["script", "style"]):
-                    script.decompose()
-                text = soup.get_text(separator=" ", strip=True)
-                # Remove any remaining HTML entities and excessive whitespace
-                clean = re.sub(r"\s+", " ", text)
-                # Remove any stray HTML-like patterns
-                clean = re.sub(r'<[^>]+>', '', clean)
-                clean = re.sub(r'href="[^"]*"', '', clean)
-                clean = clean[:3000]  # Limit per URL
-                context_parts.append(f"From {url}:\n{clean}\n")
-                sources.append(url)
-        except Exception as e:
-            print(f"Failed to fetch {url}: {e}")
-            continue
-    
-    web_context = "\n".join(context_parts) if context_parts else "No web content retrieved."
-    return web_context, sources
+        for doc in docs:
+            source_url = doc.metadata.get("source", "Unknown")
+            # Limit content per document
+            content = doc.page_content[:3000]
+            context_parts.append(f"From {source_url}:\n{content}\n")
+            if source_url not in sources:
+                sources.append(source_url)
+        
+        web_context = "\n".join(context_parts) if context_parts else "No web content retrieved."
+        return web_context, sources
+        
+    except FileNotFoundError:
+        # Index not built yet - return empty
+        print("[Unified] FAISS index not found - web context unavailable")
+        return "Web content unavailable (index not built yet).", []
+    except Exception as e:
+        print(f"[Unified] Error retrieving web context: {repr(e)}")
+        return "No web content retrieved.", []
 
 
 def _clean_technical_references(text: str) -> str:
