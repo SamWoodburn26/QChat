@@ -15,12 +15,36 @@ type Conversation = { id: string; title: string; messages: Msg[]; created: strin
 
 const llm_base = localSettings.Values.SERVER_URL || 'http://localhost:7071';
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function extractHttpUrl(value: string): string | null {
+  const match = value.match(/https?:\/\/[^\s<>"']+/i);
+  return match ? match[0].replace(/[),.;:!?]+$/, '') : null;
+}
+
 function linkifyText(text: string): string {
-  const urlRegex = /(https?:\/\/[^\s<>]+)/g;
-  return text.replace(urlRegex, (url) => {
-    const cleanUrl = url.replace(/[.,;:!?]+$/, '');
-    return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" style="color: #0078D4; text-decoration: underline;">${cleanUrl}</a>`;
-  });
+  const urlRegex = /https?:\/\/[^\s<>"']+/g;
+  const anchorRegex = /(<a\b[^>]*>.*?<\/a>)/gis;
+  return text
+    .split(anchorRegex)
+    .map((segment) => {
+      if (segment.toLowerCase().startsWith('<a')) {
+        return segment;
+      }
+
+      return segment.replace(urlRegex, (url) => {
+        const cleanUrl = url.replace(/[),.;:!?]+$/, '');
+        return `<a href="${cleanUrl}" target="_blank" rel="noopener noreferrer" style="color: #0078D4; text-decoration: underline;">${cleanUrl}</a>`;
+      });
+    })
+    .join('');
 }
 
 export default function QChat() {
@@ -103,9 +127,16 @@ export default function QChat() {
       let text = reply;
       text = text.replace(/\n/g, '<br>');
       if (sources.length > 0) {
-        const top_two = sources.slice(0, 2);
-        const links = top_two.map(src => `<a href="${src}" target="_blank" rel="noreferer">${src}</a>`).join('<br>');
-        text += '<br/><br/><strong>Sources:</strong><br/> ' + links;
+        const links = sources
+          .map((src) => {
+            const cleanedUrl = extractHttpUrl(src);
+            if (cleanedUrl) {
+              return `<li><a href="${cleanedUrl}" target="_blank" rel="noopener noreferrer">${cleanedUrl}</a></li>`;
+            }
+            return `<li>${escapeHtml(src)}</li>`;
+          })
+          .join('');
+        text += '<br/><br/><strong>Sources:</strong><ul>' + links + '</ul>';
       }
 
       const assistant: Msg = { role: 'assistant', text };

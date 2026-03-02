@@ -14,12 +14,11 @@ import re
 from typing import Optional, Dict, Any
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-from bs4 import BeautifulSoup
-import requests
 
 from .profile_service import get_user_profile
 from .faq_data import FAQ_DATA
 from .profanity_filter import sanitize_text
+from .RAG import retrieve as rag_retrieve
 
 # LLM Configuration
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
@@ -38,16 +37,6 @@ unified_llm = ChatOllama(
 
 # Greetings pattern
 GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
-
-# Load QU URLs
-QU_DOCS_PATH = os.path.join(os.path.dirname(__file__), "qu_docs.txt")
-try:
-    with open(QU_DOCS_PATH, "r", encoding="utf-8") as f:
-        QU_DOCS_URLS = [line.strip() for line in f if line.strip().startswith("http")]
-    print(f"Unified system loaded {len(QU_DOCS_URLS)} QU URLs")
-except Exception as e:
-    print(f"ERROR loading qu_docs.txt: {e}")
-    QU_DOCS_URLS = []
 
 # Unified prompt template
 unified_prompt = ChatPromptTemplate.from_messages([
@@ -269,66 +258,106 @@ def _get_faq_context(question: str) -> str:
     return "\n".join(faq_lines)
 
 
+def _score_document_relevance(question: str, doc_preview: str, source_url: str) -> int:
+    """Use LLM to score document relevance (0-100)."""
+    try:
+        scoring_prompt = f"""Rate how relevant this document is to answering the question. Give ONLY a number from 0-100.
+
+Question: {question}
+
+Document URL: {source_url}
+Document Preview: {doc_preview[:500]}
+
+Score (0-100, where 100 is highly relevant and directly answers the question): """
+        
+        response = unified_llm.invoke(scoring_prompt)
+        score_text = response.content.strip()
+        
+        # Extract just the number
+        import re
+        match = re.search(r'\b(\d+)\b', score_text)
+        if match:
+            score = int(match.group(1))
+            return min(max(score, 0), 100)  # Clamp to 0-100
+        return 0
+    except Exception as e:
+        print(f"[Unified] Error scoring document: {repr(e)}")
+        return 0
+
+
 def _get_web_context(question: str) -> tuple[str, list]:
-    """Get relevant web content from QU sites."""
-    q_lower = question.lower()
-    candidates = []
-    
-    # Rank URLs based on question keywords
-    for url in QU_DOCS_URLS:
-        score = 0
-        url_lower = url.lower()
+    """Get relevant web content from QU sites using vector store retrieval."""
+    try:
+        # Retrieve more documents initially for AI-based filtering
+        docs = rag_retrieve(question, k=12)
         
-        # Keyword matching
-        if any(k in q_lower for k in ["menu", "dining", "eat", "food"]) and "dining" in url_lower:
-            score += 10
-        if any(k in q_lower for k in ["event", "calendar", "happening"]) and "event" in url_lower:
-            score += 10
-        if any(k in q_lower for k in ["catalog", "course", "class"]) and "catalog" in url_lower:
-            score += 10
+        if not docs:
+            print(f"[Unified] No documents retrieved for: {question}")
+            return "No web content retrieved.", []
         
-        # General word matching
-        for word in q_lower.split():
-            if len(word) > 3 and word in url_lower:
-                score += 2
+        print(f"[Unified] Retrieved {len(docs)} documents, using AI to score relevance...")
         
-        if score > 0:
-            candidates.append((url, score))
-    
-    candidates.sort(key=lambda x: x[1], reverse=True)
-    top_urls = [url for url, _ in candidates[:3]]
-    
-    if not top_urls:
-        top_urls = QU_DOCS_URLS[:2]  # Default fallback
-    
-    # Fetch content
-    context_parts = []
-    sources = []
-    headers = {"User-Agent": "QChat-Bot/1.0"}
-    
-    for url in top_urls:
-        try:
-            r = requests.get(url, timeout=8, headers=headers)
-            if r.status_code == 200:
-                soup = BeautifulSoup(r.text, "html.parser")
-                # Remove script and style elements
-                for script in soup(["script", "style"]):
-                    script.decompose()
-                text = soup.get_text(separator=" ", strip=True)
-                # Remove any remaining HTML entities and excessive whitespace
-                clean = re.sub(r"\s+", " ", text)
-                # Remove any stray HTML-like patterns
-                clean = re.sub(r'<[^>]+>', '', clean)
-                clean = re.sub(r'href="[^"]*"', '', clean)
-                clean = clean[:3000]  # Limit per URL
-                context_parts.append(f"From {url}:\n{clean}\n")
-                sources.append(url)
-        except Exception as e:
-            print(f"Failed to fetch {url}: {e}")
-            continue
-    
-    web_context = "\n".join(context_parts) if context_parts else "No web content retrieved."
-    return web_context, sources
+        # Use AI to score each document's relevance
+        scored_docs = []
+        for doc in docs:
+            source_url = doc.metadata.get("source", "Unknown")
+            preview = doc.page_content[:800]
+            
+            # Get AI relevance score
+            score = _score_document_relevance(question, preview, source_url)
+            scored_docs.append((score, doc))
+            
+            print(f"[Unified] AI Score: {score}/100 - {source_url[:80]}...")
+        
+        # Sort by AI score (highest first)
+        scored_docs.sort(key=lambda x: x[0], reverse=True)
+        
+        # Select top 4 documents with diversity
+        selected_docs = []
+        seen_pages = set()
+        
+        for score, doc in scored_docs:
+            # Skip very low scores (likely irrelevant)
+            if score < 20:
+                continue
+                
+            source_url = doc.metadata.get("source", "")
+            page_id = source_url.split('#')[0].split('?')[0].rstrip('/')
+            
+            if page_id not in seen_pages:
+                selected_docs.append((score, doc))
+                seen_pages.add(page_id)
+            
+            if len(selected_docs) >= 4:
+                break
+        
+        # Debug output
+        print(f"[Unified] Selected {len(selected_docs)} top documents:")
+        for i, (score, doc) in enumerate(selected_docs, 1):
+            source = doc.metadata.get("source", "Unknown")
+            print(f"  {i}. [AI Score: {score}/100] {source}")
+        
+        # Build context from selected documents
+        context_parts = []
+        sources = []
+        
+        for score, doc in selected_docs:
+            source_url = doc.metadata.get("source", "Unknown")
+            content = doc.page_content[:3000]
+            context_parts.append(f"From {source_url}:\n{content}\n")
+            if source_url not in sources:
+                sources.append(source_url)
+        
+        web_context = "\n".join(context_parts) if context_parts else "No web content retrieved."
+        return web_context, sources
+        
+    except FileNotFoundError:
+        # Index not built yet - return empty
+        print("[Unified] FAISS index not found - web context unavailable")
+        return "Web content unavailable (index not built yet).", []
+    except Exception as e:
+        print(f"[Unified] Error retrieving web context: {repr(e)}")
+        return "No web content retrieved.", []
 
 
 def _clean_technical_references(text: str) -> str:
