@@ -1,14 +1,39 @@
+import * as React from 'react';
 import styles from './QPage.module.css';
 
 export default function QPage(props: { onClose?: () => void }) {
+  const [isAdmin, setIsAdmin] = React.useState(false);
+
+  React.useEffect(() => {
+    // Check if user is admin
+    const role = localStorage.getItem('role');
+    setIsAdmin(role === 'admin');
+  }, []);
+
   return (
     <div className={styles.page}>
       <header className={styles.header}>
         <h1>qChat — Student Help Center</h1>
         <p className={styles.lead}>Find quick answers, resources, and contact points for university services.</p>
+        
+        <div className={styles.headerButtons}>
+          {/* Admin Button - Only shown for admin users */}
+          {isAdmin && (
+            <button 
+              className={styles.adminBtn}
+              onClick={() => {
+                // Navigate to admin panel or open admin modal
+                alert('Admin Panel - Coming Soon!');
+              }}
+            >
+              Admin Panel
+            </button>
+          )}
+       
         {props.onClose && (
           <button className={styles.close} onClick={props.onClose} aria-label="Close page">Close</button>
         )}
+        </div>
       </header>
 
       <main className={styles.content}>
