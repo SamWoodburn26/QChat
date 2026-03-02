@@ -258,22 +258,91 @@ def _get_faq_context(question: str) -> str:
     return "\n".join(faq_lines)
 
 
+def _score_document_relevance(question: str, doc_preview: str, source_url: str) -> int:
+    """Use LLM to score document relevance (0-100)."""
+    try:
+        scoring_prompt = f"""Rate how relevant this document is to answering the question. Give ONLY a number from 0-100.
+
+Question: {question}
+
+Document URL: {source_url}
+Document Preview: {doc_preview[:500]}
+
+Score (0-100, where 100 is highly relevant and directly answers the question): """
+        
+        response = unified_llm.invoke(scoring_prompt)
+        score_text = response.content.strip()
+        
+        # Extract just the number
+        import re
+        match = re.search(r'\b(\d+)\b', score_text)
+        if match:
+            score = int(match.group(1))
+            return min(max(score, 0), 100)  # Clamp to 0-100
+        return 0
+    except Exception as e:
+        print(f"[Unified] Error scoring document: {repr(e)}")
+        return 0
+
+
 def _get_web_context(question: str) -> tuple[str, list]:
     """Get relevant web content from QU sites using vector store retrieval."""
     try:
-        # Use RAG vector store retrieval instead of real-time fetching
-        docs = rag_retrieve(question, k=3)
+        # Retrieve more documents initially for AI-based filtering
+        docs = rag_retrieve(question, k=12)
         
         if not docs:
+            print(f"[Unified] No documents retrieved for: {question}")
             return "No web content retrieved.", []
         
-        # Build context from retrieved documents
+        print(f"[Unified] Retrieved {len(docs)} documents, using AI to score relevance...")
+        
+        # Use AI to score each document's relevance
+        scored_docs = []
+        for doc in docs:
+            source_url = doc.metadata.get("source", "Unknown")
+            preview = doc.page_content[:800]
+            
+            # Get AI relevance score
+            score = _score_document_relevance(question, preview, source_url)
+            scored_docs.append((score, doc))
+            
+            print(f"[Unified] AI Score: {score}/100 - {source_url[:80]}...")
+        
+        # Sort by AI score (highest first)
+        scored_docs.sort(key=lambda x: x[0], reverse=True)
+        
+        # Select top 4 documents with diversity
+        selected_docs = []
+        seen_pages = set()
+        
+        for score, doc in scored_docs:
+            # Skip very low scores (likely irrelevant)
+            if score < 20:
+                continue
+                
+            source_url = doc.metadata.get("source", "")
+            page_id = source_url.split('#')[0].split('?')[0].rstrip('/')
+            
+            if page_id not in seen_pages:
+                selected_docs.append((score, doc))
+                seen_pages.add(page_id)
+            
+            if len(selected_docs) >= 4:
+                break
+        
+        # Debug output
+        print(f"[Unified] Selected {len(selected_docs)} top documents:")
+        for i, (score, doc) in enumerate(selected_docs, 1):
+            source = doc.metadata.get("source", "Unknown")
+            print(f"  {i}. [AI Score: {score}/100] {source}")
+        
+        # Build context from selected documents
         context_parts = []
         sources = []
         
-        for doc in docs:
+        for score, doc in selected_docs:
             source_url = doc.metadata.get("source", "Unknown")
-            # Limit content per document
             content = doc.page_content[:3000]
             context_parts.append(f"From {source_url}:\n{content}\n")
             if source_url not in sources:
