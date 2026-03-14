@@ -1,7 +1,7 @@
 """
 User Model for QChat
 To use user data in MongoDB in a type-safe manner in Python
-To add the role field (student/admin)
+To add the role field (student/admin/teacher)
 """
 
 from typing import Optional, Literal, Any
@@ -38,7 +38,7 @@ class PyObjectId(ObjectId):
 class UserBase(BaseModel):
     """Common fields for all users"""
     username: str  # Email or name
-    role: Literal["student", "admin"] = "student"  # Default: student
+    role: Literal["student", "admin", "teacher"] = "student"  
 
 
 class UserCreate(UserBase):
@@ -73,6 +73,10 @@ class UserInDB(UserBase):
     def is_admin(self) -> bool:
         """Admin control"""
         return self.role == "admin"
+    
+    def is_teacher(self) -> bool:  
+        """Teacher control"""
+        return self.role == "teacher"
 
 
 class UserResponse(BaseModel):
@@ -95,5 +99,5 @@ class UserResponse(BaseModel):
 
 class UserUpdate(BaseModel):
     """Fields that can be updated"""
-    role: Optional[Literal["student", "admin"]] = None
+    role: Optional[Literal["student", "admin", "teacher"]] = None  
     lastLogin: Optional[datetime] = None

@@ -159,7 +159,7 @@ def handle_update_user(req: func.HttpRequest) -> func.HttpResponse:
         req_body = req.get_json()
         new_role = req_body.get('role')
         
-        if not new_role or new_role not in ['admin', 'student']:
+        if not new_role or new_role not in ['admin', 'student','teacher']:
             return func.HttpResponse(
                 json.dumps({"error": "Valid role is required (admin or student)"}),
                 status_code=400,

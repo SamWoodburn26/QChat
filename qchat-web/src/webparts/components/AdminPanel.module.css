@@ -145,6 +145,25 @@
   cursor: not-allowed;
 }
 
+.dangerButton {
+  background: #dc3545;
+  color: white;
+  border: none;
+  padding: 10px 16px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.dangerButton:hover:not(:disabled) {
+  background: #c82333;
+}
+
+.dangerButton:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 
 .toolbar {
   padding: 12px 20px;
@@ -277,6 +296,16 @@
   text-transform: uppercase;
 }
 
+.badgeTeacher {
+  background: #10b981;
+  color: white;
+  padding: 4px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
 .roleButton {
   padding: 6px 12px;
   border-radius: 6px;
@@ -354,4 +383,62 @@
   border-radius: 6px;
   color: #856404;
   font-size: 13px;
+}
+
+.warningBox {
+  background: #fff3cd;
+  border: 1px solid #ffc107;
+  border-radius: 6px;
+  padding: 12px;
+  margin-top: 16px;
+  color: #856404;
+}
+
+/* Search Bar Styles */
+.searchBar {
+  padding: 12px 20px;
+  border-bottom: 1px solid #eee;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+}
+
+.searchInput {
+  flex: 1;
+  padding: 10px 40px 10px 12px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  font-size: 14px;
+  transition: all 0.2s;
+}
+
+.searchInput:focus {
+  outline: none;
+  border-color: #418fde;
+  box-shadow: 0 0 0 3px rgba(65, 143, 222, 0.1);
+}
+
+.clearSearchButton {
+  position: absolute;
+  right: 30px;
+  background: none;
+  border: none;
+  font-size: 20px;
+  color: #999;
+  cursor: pointer;
+  padding: 4px 8px;
+  line-height: 1;
+}
+
+.clearSearchButton:hover {
+  color: #666;
+}
+
+.urlCount {
+  padding: 8px 20px;
+  font-size: 13px;
+  color: #666;
+  background: #f9f9f9;
+  border-bottom: 1px solid #eee;
 }

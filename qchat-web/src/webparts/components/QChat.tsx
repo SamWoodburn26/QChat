@@ -9,6 +9,7 @@ import TMImage from '../assets/TM.png';
 import bobcatImage from '../assets/Bobcat.png';
 import localSettings from '../../backend/local.settings.json';
 import AdminPanel from './AdminPanel';
+import TeacherPanel from './TeacherPanel';
 
 type Msg = { role: 'user' | 'assistant'; text: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
@@ -54,7 +55,11 @@ export default function QChat() {
   
   // Admin state
   const [isAdmin, setIsAdmin] = React.useState(false);
-  const [showAdminPanel, setShowAdminPanel] = React.useState(false); 
+  const [showAdminPanel, setShowAdminPanel] = React.useState(false);
+  
+  // Teacher state
+  const [isTeacher, setIsTeacher] = React.useState(false);
+  const [showTeacherPanel, setShowTeacherPanel] = React.useState(false);
   
   React.useEffect(() => {
     console.log('QChat component mounted');
@@ -82,13 +87,15 @@ export default function QChat() {
   const [history, setHistory] = React.useState<Conversation[]>([]);
   const [currentConvId, setCurrentConvId] = React.useState<string | null>(null);
 
-  // Check admin status when user changes
+  // Check admin/teacher status when user changes
   React.useEffect(() => {
     if (currentUser) {
       const role = localStorage.getItem('role');
       setIsAdmin(role === 'admin');
+      setIsTeacher(role === 'teacher');
     } else {
       setIsAdmin(false);
+      setIsTeacher(false);
     }
   }, [currentUser]);
 
@@ -235,6 +242,7 @@ export default function QChat() {
         localStorage.setItem('name', data.name || username);
         localStorage.setItem('role', data.role);
         setIsAdmin(data.role === 'admin');
+        setIsTeacher(data.role === 'teacher');
         
         await loadConversationsFromDb(username);
         setLoginOpen(false);
@@ -267,6 +275,7 @@ export default function QChat() {
         localStorage.setItem('username', data.username);
         localStorage.setItem('role', data.role);
         setIsAdmin(data.role === 'admin');
+        setIsTeacher(data.role === 'teacher');
         
         await loadConversationsFromDb(username);
         setLoginOpen(false);
@@ -287,6 +296,7 @@ export default function QChat() {
     localStorage.removeItem('name');
     localStorage.removeItem('role');
     setIsAdmin(false);
+    setIsTeacher(false);
     
     setHistory([]);
     setCurrentConvId(null);
@@ -339,6 +349,7 @@ export default function QChat() {
             localStorage.setItem('name', data.name);
             localStorage.setItem('role', data.role);
             setIsAdmin(data.role === 'admin');
+            setIsTeacher(data.role === 'teacher');
             
             await loadConversationsFromDb(email);
             setLoginOpen(false);
@@ -397,6 +408,7 @@ export default function QChat() {
             localStorage.setItem('name', data.name);
             localStorage.setItem('role', data.role);
             setIsAdmin(data.role === 'admin');
+            setIsTeacher(data.role === 'teacher');
             
             await loadConversationsFromDb(email);
             setLoginOpen(false);
@@ -423,6 +435,9 @@ export default function QChat() {
       
       {/* Admin Panel */}
       {showAdminPanel && <AdminPanel onClose={() => setShowAdminPanel(false)} />}
+      
+      {/* Teacher Panel */}
+      {showTeacherPanel && <TeacherPanel onClose={() => setShowTeacherPanel(false)} />}
       
       <ChatHistoryPanel
         open={historyOpen}
@@ -475,6 +490,16 @@ export default function QChat() {
               onClick={() => setShowAdminPanel(true)}
             >
               Admin Panel
+            </button>
+          )}
+          
+          {/* Teacher Panel Button */}
+          {currentUser && isTeacher && (
+            <button
+              className={styles.loginButton}
+              onClick={() => setShowTeacherPanel(true)}
+            >
+              Tools
             </button>
           )}
           

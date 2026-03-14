@@ -6,8 +6,11 @@
       "type": "httpTrigger",
       "direction": "in",
       "name": "req",
-      "methods": ["get", "put"],
-      "route": "usersadmin/{id?}"
+      "methods": [
+        "get",
+        "post"
+      ],
+      "route": "maintenance"
     },
     {
       "type": "http",

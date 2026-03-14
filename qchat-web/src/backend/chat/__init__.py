@@ -171,13 +171,38 @@ def _smart_extract_and_save_profile(username: str, user_message: str, bot_reply:
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
+    # MAINTENANCE MODE CHECK - BLOCKS EVERYONE
+    maintenance_file = os.path.join(os.path.dirname(__file__), '..', 'maintenance_mode.json')
+    try:
+        if os.path.exists(maintenance_file):
+            with open(maintenance_file, 'r') as f:
+                maintenance_status = json.load(f)
+                if maintenance_status.get('enabled', False):
+                    print('Chat request BLOCKED - Maintenance mode enabled')
+                    response = func.HttpResponse(
+                        json.dumps({
+                            "error": "maintenance_mode",
+                            "message": maintenance_status.get('message', 'System under maintenance')
+                        }),
+                        status_code=503,
+                        mimetype="application/json"
+                    )
+                    response.headers["Access-Control-Allow-Origin"] = "*"
+                    response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+                    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+                    return response
+    except Exception as e:
+        print(f'Error checking maintenance mode: {str(e)}')
+    
     if req.method == "OPTIONS":
         response = func.HttpResponse("")
         response.headers["Access-Control-Allow-Origin"] = "*"
         response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         return response
+    
     print("main called")
+    
     try:
         body = req.get_json()
     except ValueError:

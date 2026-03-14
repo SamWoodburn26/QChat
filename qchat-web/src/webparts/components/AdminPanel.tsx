@@ -11,7 +11,7 @@ interface User {
   _id: string;
   username: string;
   name?: string;
-  role: 'student' | 'admin';
+  role: 'student' | 'admin' | 'teacher';
   createdAt: string;
   lastLogin?: string;
 }
@@ -73,6 +73,7 @@ function URLsTab() {
   const [error, setError] = React.useState<string | null>(null);
   const [adding, setAdding] = React.useState(false);
   const [newUrl, setNewUrl] = React.useState('');
+  const [searchQuery, setSearchQuery] = React.useState('');
 
   const loadUrls = React.useCallback(async () => {
     setLoading(true);
@@ -93,6 +94,13 @@ function URLsTab() {
   React.useEffect(() => {
     loadUrls();
   }, [loadUrls]);
+
+  // Filtered URLs
+  const filteredUrls = React.useMemo(() => {
+    if (!searchQuery.trim()) return urls;
+    const query = searchQuery.toLowerCase();
+    return urls.filter(url => url.toLowerCase().includes(query));
+  }, [urls, searchQuery]);
 
   async function saveUrls(newList: string[]) {
     setSaving(true);
@@ -192,24 +200,53 @@ function URLsTab() {
               </div>
             )}
           </div>
+
+          {/* SEARCH BAR */}
+          <div className={styles.searchBar}>
+            <input
+              type="text"
+              className={styles.searchInput}
+              placeholder="Search URLs..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                className={styles.clearSearchButton}
+                onClick={() => setSearchQuery('')}
+              >
+                ×
+              </button>
+            )}
+          </div>
+
+          <div className={styles.urlCount}>
+            Showing {filteredUrls.length} of {urls.length} URLs
+          </div>
+
           <ul className={styles.list}>
-            {urls.map((url, i) => (
-              <li key={`${i}-${url}`} className={styles.row}>
-                <a href={url} target="_blank" rel="noopener noreferrer" className={styles.link}>
-                  {url}
-                </a>
-                <button
-                  type="button"
-                  className={styles.removeButton}
-                  onClick={() => removeUrl(i)}
-                  disabled={saving}
-                  aria-label="Remove"
-                >
-                  Remove
-                </button>
-              </li>
-            ))}
+            {filteredUrls.map((url) => {
+              const originalIndex = urls.indexOf(url);
+              return (
+                <li key={`${originalIndex}-${url}`} className={styles.row}>
+                  <a href={url} target="_blank" rel="noopener noreferrer" className={styles.link}>
+                    {url}
+                  </a>
+                  <button
+                    type="button"
+                    className={styles.removeButton}
+                    onClick={() => removeUrl(originalIndex)}
+                    disabled={saving}
+                    aria-label="Remove"
+                  >
+                    Remove
+                  </button>
+                </li>
+              );
+            })}
           </ul>
+          {filteredUrls.length === 0 && <div className={styles.empty}>No URLs found</div>}
         </>
       )}
     </>
@@ -217,12 +254,13 @@ function URLsTab() {
 }
 
 
-// USERS TAB 
+// USERS TAB - WITH SEARCH AND TEACHER ROLE
 function UsersTab() {
   const [users, setUsers] = React.useState<User[]>([]);
   const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
   const [updating, setUpdating] = React.useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = React.useState('');
 
   React.useEffect(() => {
     loadUsers();
@@ -243,10 +281,9 @@ function UsersTab() {
     }
   }
 
-  async function toggleRole(userId: string, currentRole: string) {
+  async function changeRole(userId: string, newRole: 'student' | 'admin' | 'teacher') {
     setUpdating(userId);
     setError(null);
-    const newRole = currentRole === 'admin' ? 'student' : 'admin';
 
     try {
       const res = await fetch(`${llm_base}/api/usersadmin/${userId}`, {
@@ -258,7 +295,7 @@ function UsersTab() {
       if (!res.ok) throw new Error('Failed to update role');
 
       setUsers((prev) =>
-        prev.map((u) => (u._id === userId ? { ...u, role: newRole as 'student' | 'admin' } : u))
+        prev.map((u) => (u._id === userId ? { ...u, role: newRole } : u))
       );
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to update role');
@@ -267,11 +304,47 @@ function UsersTab() {
     }
   }
 
+  // Filtered Users
+  const filteredUsers = React.useMemo(() => {
+    if (!searchQuery.trim()) return users;
+    const query = searchQuery.toLowerCase();
+    return users.filter(user => 
+      user.username.toLowerCase().includes(query) ||
+      user.name?.toLowerCase().includes(query) ||
+      user.role.toLowerCase().includes(query)
+    );
+  }, [users, searchQuery]);
+
   if (loading) return <div className={styles.loading}>Loading users...</div>;
 
   return (
     <>
       {error && <div className={styles.error}>{error}</div>}
+
+      {/* SEARCH BAR */}
+      <div className={styles.searchBar}>
+        <input
+          type="text"
+          className={styles.searchInput}
+          placeholder="Search users (username, name, role)..."
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+        />
+        {searchQuery && (
+          <button
+            type="button"
+            className={styles.clearSearchButton}
+            onClick={() => setSearchQuery('')}
+          >
+            ×
+          </button>
+        )}
+      </div>
+
+      <div className={styles.urlCount}>
+        Showing {filteredUsers.length} of {users.length} users
+      </div>
+
       <div className={styles.tableWrapper}>
         <table className={styles.table}>
           <thead>
@@ -283,117 +356,172 @@ function UsersTab() {
             </tr>
           </thead>
           <tbody>
-            {users.map((user) => (
+            {filteredUsers.map((user) => (
               <tr key={user._id}>
                 <td>{user.username}</td>
                 <td>{user.name || '-'}</td>
                 <td>
-                  <span className={user.role === 'admin' ? styles.badgeAdmin : styles.badgeStudent}>
+                  <span 
+                    className={
+                      user.role === 'admin' 
+                        ? styles.badgeAdmin 
+                        : user.role === 'teacher' 
+                          ? styles.badgeTeacher 
+                          : styles.badgeStudent
+                    }
+                  >
                     {user.role}
                   </span>
                 </td>
                 <td>
-                  <button
-                    type="button"
-                    className={styles.roleButton}
-                    onClick={() => toggleRole(user._id, user.role)}
-                    disabled={updating === user._id}
-                  >
-                    {updating === user._id
-                      ? '...'
-                      : user.role === 'admin'
-                      ? 'Make Student'
-                      : 'Make Admin'}
-                  </button>
+                  <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    {user.role !== 'student' && (
+                      <button
+                        type="button"
+                        className={styles.roleButton}
+                        onClick={() => changeRole(user._id, 'student')}
+                        disabled={updating === user._id}
+                      >
+                        Student
+                      </button>
+                    )}
+                    {user.role !== 'admin' && (
+                      <button
+                        type="button"
+                        className={styles.roleButton}
+                        onClick={() => changeRole(user._id, 'admin')}
+                        disabled={updating === user._id}
+                      >
+                        Admin
+                      </button>
+                    )}
+                    {user.role !== 'teacher' && (
+                      <button
+                        type="button"
+                        className={styles.roleButton}
+                        onClick={() => changeRole(user._id, 'teacher')}
+                        disabled={updating === user._id}
+                      >
+                        Teacher
+                      </button>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}
           </tbody>
         </table>
-        {users.length === 0 && <div className={styles.empty}>No users found</div>}
+        {filteredUsers.length === 0 && <div className={styles.empty}>No users found</div>}
       </div>
     </>
   );
 }
 
 
-// BACKEND TAB 
+// BACKEND TAB - MAINTENANCE MODE CONTROL
 function BackendTab() {
-  const [status, setStatus] = React.useState<'checking' | 'running' | 'stopped'>('checking');
+  const [status, setStatus] = React.useState<{ enabled: boolean; message: string; updated_at: string | null; updated_by: string | null } | null>(null);
+  const [loading, setLoading] = React.useState(true);
   const [error, setError] = React.useState<string | null>(null);
-  const [action, setAction] = React.useState<'idle' | 'restarting'>('idle');
+  const [toggling, setToggling] = React.useState(false);
 
   React.useEffect(() => {
-    checkStatus();
+    loadStatus();
   }, []);
 
-  async function checkStatus() {
-    setStatus('checking');
+  async function loadStatus() {
+    setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${llm_base}/api/health`, { signal: AbortSignal.timeout(3000) });
-      setStatus(res.ok ? 'running' : 'stopped');
-    } catch {
-      setStatus('stopped');
+      const res = await fetch(`${llm_base}/api/maintenance`);
+      if (!res.ok) throw new Error('Failed to load status');
+      const data = await res.json();
+      setStatus(data);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to load status');
+    } finally {
+      setLoading(false);
     }
   }
 
-  async function restartBackend() {
-    setAction('restarting');
+  async function toggleMaintenance() {
+    if (!status) return;
+    
+    const newEnabled = !status.enabled;
+    const confirmMsg = newEnabled 
+      ? 'WARNING: This will DISABLE chat for ALL users (including admins). Continue?'
+      : 'Enable chat for all users?';
+    
+    if (!confirm(confirmMsg)) return;
+
+    setToggling(true);
     setError(null);
+    
     try {
-      const res = await fetch(`${llm_base}/api/adminrestart`, { method: 'POST' });
-      if (!res.ok) throw new Error('Failed to restart backend');
-      setTimeout(checkStatus, 2000);
+      const username = localStorage.getItem('username') || 'admin';
+      
+      const res = await fetch(`${llm_base}/api/maintenance`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          enabled: newEnabled,
+          updated_by: username
+        })
+      });
+
+      if (!res.ok) throw new Error('Failed to toggle maintenance mode');
+      
+      const data = await res.json();
+      setStatus(data);
+      
+      alert(newEnabled ? 'Maintenance mode ENABLED - Chat is now OFFLINE for everyone' : 'Maintenance mode DISABLED - Chat is now online');
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to restart');
+      setError(e instanceof Error ? e.message : 'Failed to toggle maintenance mode');
     } finally {
-      setAction('idle');
+      setToggling(false);
     }
   }
+
+  if (loading) return <div className={styles.loading}>Loading status...</div>;
 
   return (
     <div className={styles.backendControl}>
       {error && <div className={styles.error}>{error}</div>}
 
       <div className={styles.statusCard}>
-        <h3>Backend Status</h3>
+        <h3>Emergency Maintenance Mode</h3>
         <div className={styles.statusRow}>
           <span>Status:</span>
-          <span
-            className={
-              status === 'running'
-                ? styles.statusRunning
-                : status === 'stopped'
-                ? styles.statusStopped
-                : styles.statusChecking
-            }
-          >
-            {status === 'running' ? 'Running' : status === 'stopped' ? 'Stopped' : 'Checking...'}
+          <span className={status?.enabled ? styles.statusStopped : styles.statusRunning}>
+            {status?.enabled ? 'CHAT OFFLINE' : 'CHAT ONLINE'}
           </span>
         </div>
+        
+        {status?.enabled && status.updated_by && (
+          <div style={{ marginTop: '12px', fontSize: '14px', color: '#666' }}>
+            <div>Disabled by: {status.updated_by}</div>
+            {status.updated_at && <div>At: {new Date(status.updated_at).toLocaleString()}</div>}
+          </div>
+        )}
+
         <button
           type="button"
-          className={styles.secondaryButton}
-          onClick={checkStatus}
-          disabled={action !== 'idle'}
+          className={status?.enabled ? styles.primaryButton : styles.dangerButton}
+          onClick={toggleMaintenance}
+          disabled={toggling}
+          style={{ width: '100%', marginTop: '16px' }}
         >
-          Refresh Status
+          {toggling 
+            ? 'Processing...' 
+            : status?.enabled 
+              ? 'ENABLE CHAT (Turn ON)' 
+              : 'DISABLE CHAT (Emergency Shutdown)'}
         </button>
       </div>
 
-      <div className={styles.actionsCard}>
-        <h3>Actions</h3>
-        <button
-          type="button"
-          className={styles.primaryButton}
-          onClick={restartBackend}
-          disabled={action !== 'idle'}
-          style={{ width: '100%', marginBottom: '12px' }}
-        >
-          {action === 'restarting' ? 'Restarting...' : ' Restart Backend'}
-        </button>
-        <p className={styles.warning}> Warning: This will restart the backend and may affect all users.</p>
+      <div className={styles.warningBox}>
+        <strong>Warning:</strong> When maintenance mode is enabled, ALL users (including admins) cannot use chat. 
+        Use this only in emergency situations (security breach, data leak, etc.).
       </div>
     </div>
   );
