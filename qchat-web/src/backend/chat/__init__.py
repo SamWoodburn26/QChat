@@ -4,13 +4,20 @@ import json, os, re
 from datetime import datetime
 from pymongo import MongoClient
 import certifi
-
+# for llm
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_ollama import ChatOllama
 # Profile service import
 from .profile_service import ensure_profile_exists, get_user_profile
 # Smart profile extractor
 from .smart_profile_extractor import extract_profile_info_from_conversation, apply_extracted_info_to_profile
 # Unified response system (replaces tiered Personal→FAQ→RAG)
 from .unified_response import get_unified_response
+# FAQ matcher import
+from .faq_matcher import check_faq_by_keywords
+from .profanity_filter import sanitize_text
+from .RAG import retrieve
+from .livewhale import get_upcoming_events
 
 # MongoDB Configuration
 MONGO_URI = os.environ.get('MONGODB_URI') or os.getenv('MONGODB_URI')
@@ -30,6 +37,56 @@ _db_error = None
 # Collections
 CONVERSATIONS_COLLECTION = 'conversations'
 
+# greetings to aviod rag answering
+GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
+# for events
+EVENTS_TRIGGER = re.compile(
+    r"\b(next|events|event|upcoming|today|todays|tomorrow|schedule|vs|versus|week|weekend|happening|going on)\b",
+    re.I,
+)
+SPORT_WORDS = re.compile(r"\b(basketball|hockey|soccer|baseball|softball|volleyball|lacrosse)\b", re.I)
+
+
+#Enable FAQ priority: check FAQs before calling RAG
+QCHAT_FAQ_FIRST = (os.getenv('QCHAT_FAQ_FIRST', 'true').lower() == 'true')
+
+# intialize llm model
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")
+_NUM_CTX = int(os.getenv("OLLAMA_NUM_CTX", "2048"))
+_NUM_PREDICT = int(os.getenv("OLLAMA_NUM_PREDICT", "256"))
+llm = ChatOllama(
+    model=OLLAMA_MODEL,
+    base_url=OLLAMA_URL,
+    temperature=0,
+    num_ctx=_NUM_CTX,
+    model_kwargs={"num_predict": _NUM_PREDICT},
+)
+
+# prompt to only use given context
+prompt_template = ChatPromptTemplate.from_messages([
+    ("system",
+     "You are QChat, a helpful assistant for Quinnipiac University.\n"
+     "Your job is to answer using ONLY the provided context.\n\n"
+     "RULES:\n"
+     "- If the answer is in the context → answer clearly and concisely.\n"
+     "- If the question is a greeting (hi, hello, hey, etc.) → respond friendly and invite a real question.\n"
+     "- If the answer is NOT in the context and NOT a greeting → say: 'I don't know. Try asking about dining, housing, athletics, or MyQ.'\n"
+     "- NEVER make up information.\n"
+     "- ALWAYS be helpful and positive.\n"
+     "- NEVER make up or modify the links given, provide the exact link without any adjustments.\n"
+     "- assume the student is an undergraduate living on Mount Carmel, unless otherwise told. \n"
+     "Formatting rules:\n"
+     "- Use short paragraphs\n"
+     "- Use bullet points for lists\n"
+     "- Use headings when appropriate\n"
+     "- Do NOT return one long block of text\n"
+     "- Preserve line breaks\n"
+     "- When there is a numbered list seperate each number with a new line\n"
+     "- Do not include empty parentheses\n"
+     "- Do not include citations or URLs inside the answer. I will display sources separately."),
+    ("human", "Context:\n{context}\n\nUser: {question}")
+])
 
 # intiialize database connnection
 def _init_db_once():
@@ -90,6 +147,39 @@ def format_reply(text: str) -> str:
     # return cleaned version
     return t.strip()
 
+# to answer with rag
+def answer_with_rag(question: str) -> dict:
+    # handle greeting
+    if GREETINGS_LIST.search(question.strip()):
+        return {"reply": "Hi! I'm QChat. Ask me anything about Quinnipiac!", "sources": []}
+
+    docs = retrieve(question, k=6)
+    # failure to retrieve docs
+    if not docs:
+        return {
+            "reply": "I don't know, not in the provided resources",
+            "sources": [],
+        }
+    # build context
+    context = "\n\n".join(f"[Source: {d.metadata.get('source','')}]\n{d.page_content}"
+        for d in docs
+    )
+    # sources list, deduplicate and preserve order
+    sources = []
+    seen = set()
+    for d in docs:
+        s = d.metadata.get("source")
+        if s and s not in seen:
+            sources.append(s)
+            seen.add(s)
+    #get reply
+    reply_text = llm.invoke(
+        prompt_template.invoke({"context": context, "question": question})
+    ).content.strip()
+    reply_text = sanitize_text(reply_text)
+    reply_text = format_reply(reply_text)
+    # retrun reply
+    return{"reply": reply_text, "sources": sources[:5]}
 
 def _get_recent_conversation_history(username: str, limit: int = 10) -> list:
     """
@@ -245,10 +335,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         return func.HttpResponse('{"error":"missing message"}', status_code=400, mimetype="application/json")
 
 
+    '''
+    unified response stuff- dont think this is needed
     # Unified response system - bot has access to profile, FAQ, and web content
     # and intelligently decides what to use based on the question
     try:
-        reply = get_unified_response(msg, username if username != "anonymous" else None)
+        #reply = get_unified_response(msg, username if username != "anonymous" else None)
         
         # Smart profile extraction using LLM for non-anonymous users
         if username and username != "anonymous":
@@ -264,6 +356,69 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             "sources": [],
             "source": "error",
         }
+    '''
+
+    # FAQ matcher logic + RAG fallback
+    try:
+        # First control FAQ if enabled
+        faq_result = None
+        if QCHAT_FAQ_FIRST:
+            print(f"Checking FAQ for: {msg}")
+            faq_result = check_faq_by_keywords(msg)
+        
+        # if FAQ found use it , else use RAG
+        if faq_result:
+            print(f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}")
+            reply = {
+                "reply": faq_result.get("reply"),
+                "sources": faq_result.get("sources", []),
+                "source": "faq",
+                "category": faq_result.get("category"),
+                "faqScore": faq_result.get("faqScore"),
+            }
+        # check to use livewhale
+        #elif EVENTS_TRIGGER.search(msg) and (SPORT_WORDS.search(msg) or "athletic" in msg.lower()):
+        elif EVENTS_TRIGGER.search(msg):
+            events = get_upcoming_events(limit=10, query=msg)
+
+            if events:
+                reply_text = "Here are upcoming Quinnipiac events:\n\n"
+
+                for e in events:
+                    reply_text += f"• {e['title']}\n  {e['link']}\n\n"
+                reply = {
+                    "reply": reply_text,
+                    "sources": [e["link"] for e in events],
+                    "source": "livewhale",
+                }
+            else:
+                # Use RAG because no FAQ match
+                print("No livewhale match, using RAG...")
+                rag_result = answer_with_rag(msg)
+                reply = {
+                    "reply": rag_result.get("reply", "I don't know."),
+                    "sources": rag_result.get("sources", []),
+                    "source": "rag",
+                }
+        else:
+            # Use RAG because no FAQ match
+            print("No FAQ match, using RAG...")
+            rag_result = answer_with_rag(msg)
+            reply = {
+                "reply": rag_result.get("reply", "I don't know."),
+                "sources": rag_result.get("sources", []),
+                "source": "rag",
+            }
+    except Exception as e:
+        err_msg = repr(e)
+        print(f"Error in FAQ/RAG processing: {err_msg}")
+        # Surface error to user so they can fix (e.g. model not found, connection refused)
+        reply = {
+            "reply": f"I don't know. (Backend error: {err_msg})",
+            "sources": [],
+            "source": "error",
+        }
+
 
     response = func.HttpResponse(
         json.dumps(reply),

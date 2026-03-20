@@ -1,5 +1,4 @@
 import * as React from 'react';
-import QPage from './QPage.tsx';
 import ChatHistoryPanel from './ChatHistoryPanel.tsx';
 import HelpTab from './HelpTab.tsx';
 import HelpBubbles from './HelpBubbles.tsx';
@@ -144,6 +143,9 @@ export default function QChat() {
           })
           .join('');
         text += '<br/><br/><strong>Sources:</strong><ul>' + links + '</ul>';
+        /*const top_two = sources.slice(0, 2);
+        const links = top_two.map(src => `<a g>${src}</a>`).join('<br>');
+        text += '<br/><br/><strong>Sources:</strong><br/> ' + links; */
       }
 
       const assistant: Msg = { role: 'assistant', text };
@@ -181,7 +183,10 @@ export default function QChat() {
 
     } catch (err) {
       console.error('Chat request error', err);
-      setMsgs(m => [...m, { role: 'assistant', text: "Could not access LLM. Please check if backend is running." }]);
+      const message = err instanceof Error
+        ? (err.message.startsWith('HTTP ') ? `Backend returned ${err.message}. Check that the API and Ollama are running.` : `Could not reach backend: ${err.message}. Is the backend running at ${llm_base}?`)
+        : "Could not access LLM. Please check that (1) the backend is running (e.g. func start) and (2) Ollama is running and reachable.";
+      setMsgs(m => [...m, { role: 'assistant', text: message }]);
     }
     finally{
         setIsLoading(false);
@@ -425,12 +430,13 @@ export default function QChat() {
     window.addEventListener('message', messageHandler);
   }
 
-  if (showPage) {
-    return <QPage onClose={() => setShowPage(false)} />;
-  }
+  // if (showPage) {
+  //   return <QPage onClose={() => setShowPage(false)} />;
+  // }
 
   return (
     <div style={{ fontFamily: 'Segoe UI, system-ui', width: "100dvw", height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+
       {showHelpTab && <HelpTab onClose={() => setShowHelpTab(false)} />}
       
       {/* Admin Panel */}
@@ -439,6 +445,11 @@ export default function QChat() {
       {/* Teacher Panel */}
       {showTeacherPanel && <TeacherPanel onClose={() => setShowTeacherPanel(false)} />}
       
+      {showHelpTab && 
+      <HelpTab onClose={() => setShowHelpTab(false)} />
+      }
+      {/* History panel is controlled (open/close) by this component */}
+
       <ChatHistoryPanel
         open={historyOpen}
         onClose={() => setHistoryOpen(false)}
@@ -472,10 +483,11 @@ export default function QChat() {
           </button>
           <button
             className={styles.helpButton}
-            onClick={() => setShowHelpTab(true)}
+            onClick={() => setShowHelpTab(!showHelpTab)}
           >
             Help
           </button>
+          
           <button
             className={styles.loginButton}
             onClick={() => setLoginOpen(v => !v)}
