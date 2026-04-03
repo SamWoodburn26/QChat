@@ -435,7 +435,7 @@ export default function QChat() {
   // }
 
   return (
-    <div style={{ fontFamily: 'Segoe UI, system-ui', width: "100dvw", height: "100dvh", display: "flex", flexDirection: "column", overflow: "hidden" }}>
+    <div className={`${styles.root} ${styles.qChat}`}>
 
       {showHelpTab && <HelpTab onClose={() => setShowHelpTab(false)} />}
       
@@ -444,10 +444,6 @@ export default function QChat() {
       
       {/* Teacher Panel */}
       {showTeacherPanel && <TeacherPanel onClose={() => setShowTeacherPanel(false)} />}
-      
-      {showHelpTab && 
-      <HelpTab onClose={() => setShowHelpTab(false)} />
-      }
       {/* History panel is controlled (open/close) by this component */}
 
       <ChatHistoryPanel
@@ -466,15 +462,8 @@ export default function QChat() {
         onGoogleLogin={handleGoogleLogin}
         onLogout={handleLogout}
       />
-      <div style={{
-        background: '#0C2340',
-        color: 'white',
-        padding: '0px 14px',
-        borderRadius: 6,
-        display: 'flex',
-        justifyContent: 'space-between',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+      <header className={styles.headerBar}>
+        <div className={styles.headerActions}>
           <button
             className={styles.historyButton}
             onClick={() => setHistoryOpen(v => !v)}
@@ -495,7 +484,6 @@ export default function QChat() {
             {currentUser ? `👤 ${currentUser}` : '👤 Login'}
           </button>
           
-          {/* Admin Panel Button */}
           {currentUser && isAdmin && (
             <button
               className={styles.loginButton}
@@ -505,7 +493,6 @@ export default function QChat() {
             </button>
           )}
           
-          {/* Teacher Panel Button */}
           {currentUser && isTeacher && (
             <button
               className={styles.loginButton}
@@ -514,29 +501,16 @@ export default function QChat() {
               Tools
             </button>
           )}
-          
-          <div className={styles.titleLogo}>
-            <img className={styles.bobcatImage} src={bobcatImage} width={100} height={100} alt="Bobcat mascot" />
-            <div style={{fontWeight: 700, fontSize: 34, lineHeight: 1, marginRight: 6}}>QCHAT</div>
-            <img className={styles.tmImg} src={TMImage} width={15} height={15} alt="Trademark symbol"/>
-          </div>
         </div>
-      </div>
+        <div className={styles.titleLogo}>
+          <img className={styles.bobcatImage} src={bobcatImage} alt="Bobcat mascot" />
+          <div className={styles.brandTitle}>QCHAT</div>
+          <img className={styles.tmImg} src={TMImage} alt="Trademark symbol" />
+        </div>
+      </header>
 
-      <div className={styles.chatMain} style={{
-        padding: 12,
-        borderRadius: 12,
-        border: '1px solid #ddd',
-        height: "85vh",
-        display: 'flex',
-        flexDirection: 'column'
-      }}>
-        <div style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
-          marginBottom: 12
-        }}>
+      <div className={styles.chatMain}>
+        <div className={styles.tipsRow}>
           <HelpBubbles open={showTips} />
           <button
             className={styles.hideTipsButton}
@@ -546,37 +520,21 @@ export default function QChat() {
           </button>
         </div>
 
-        <div style={{ 
-          flex: 1, 
-          overflowY: 'auto', 
-          display: 'flex', 
-          flexDirection: 'column',
-          marginBottom: 6
-        }}>
+        <div className={styles.messagesScroll}>
           {msgs.map((m, i) => (
-            <div key={i} style={{
-              background: m.role === 'assistant' ? '#f5f5f5' : '#e8f3ff',
-              padding: 10,
-              borderRadius: 10,
-              margin: '6px 0'
-            }}>
+            <div
+              key={i}
+              className={
+                m.role === 'assistant' ? styles.messageAssistant : styles.messageUser
+              }
+            >
               <strong>{m.role === 'assistant' ? 'qChat' : 'You'}: </strong>
               <span dangerouslySetInnerHTML={{ __html: linkifyText(m.text) }} />
             </div>
           ))}
 
           {isLoading && (
-            <div
-              style={{
-                background: '#f5f5f5',
-                padding: 10,
-                borderRadius: 10,
-                margin: '6px 0',
-                display: 'flex',
-                alignItems: 'center',
-                gap: 8
-              }}
-            >
+            <div className={styles.loadingRow}>
               <strong>qChat:</strong>
               <span className={styles.spinner} />
               <span>Thinking…</span>
@@ -585,40 +543,29 @@ export default function QChat() {
 
           <div ref={messagesEndRef} />
         </div>
-        <form onSubmit={onSend} style={{ display: 'flex', gap: 8 }}>
+        <form className={styles.composer} onSubmit={onSend}>
           <input
+            className={styles.textInput}
             value={input}
             onChange={e => setInput(e.target.value)}
-            placeholder= {isLoading ? "QChat is thinking..." : "Type a question…"}
-            disabled = {isLoading}
-            style={{
-              flex: 1,
-              padding: 10,
-              borderRadius: 10,
-              border: '1px solid #ccc',
-              opacity: isLoading ? 0.7 : 1,
-              cursor: isLoading ? 'not-allowed' : 'text'
-            }}
+            placeholder={isLoading ? "QChat is thinking..." : "Type a question…"}
+            disabled={isLoading}
+            enterKeyHint="send"
+            autoComplete="off"
           />
           <button
             className={styles.sendButton}
             type="submit"
             disabled={isLoading}
-            style={{
-              padding: '10px 16px',
-              borderRadius: 10,
-              border: '1px solid #418FDE',
-              background: '#418FDE',
-              color: 'white',
-              opacity: isLoading ? 0.7 : 1,
-              cursor: isLoading ? 'not-allowed' : 'pointer'
-            }}
           >
             Send
           </button>
         </form>
       </div>
 
+      <footer className={styles.pageFooter}>
+        Created By: Sam Woodburn, Thomas Rua, Tuana Turhan&emsp;&emsp;&emsp;&emsp; Advisors: Chetan Jaiswal & Lynn Byers
+      </footer>
 
     </div>
   );

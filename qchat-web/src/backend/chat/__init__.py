@@ -18,6 +18,7 @@ from .faq_matcher import check_faq_by_keywords
 from .profanity_filter import sanitize_text
 from .RAG import retrieve
 from .livewhale import get_upcoming_events
+from .qu_topic_redirects import get_topic_redirect, looks_like_idk_reply
 
 # MongoDB Configuration
 MONGO_URI = os.environ.get('MONGODB_URI') or os.getenv('MONGODB_URI')
@@ -39,6 +40,35 @@ CONVERSATIONS_COLLECTION = 'conversations'
 
 # greetings to aviod rag answering
 GREETINGS_LIST = re.compile(r"\b(hi|hello|hey|hii|sup|what'?s up)\b", re.IGNORECASE)
+
+_THANKS_REPLY_TEXT = (
+    "You're welcome! I'm glad I could help. Let me know if you need anything else."
+)
+
+
+def _is_thanks_only_message(msg: str) -> bool:
+    """True for short gratitude-only messages (no real follow-up question)."""
+    t = re.sub(r"[!?.,:;\"']+", "", (msg or "").strip().lower())
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t or len(t) > 100:
+        return False
+    if re.search(
+        r"\b(where|when|what|how|why|which|who|can you|could you|should i|is there)\b",
+        t,
+    ):
+        return False
+    thank_patterns = [
+        r"^thank you(\s+(so|very)\s+much)?$",
+        r"^thanks(\s+(so|a)\s+(much|lot))?$",
+        r"^(ty|thx|tysm)$",
+        r"^much appreciated$",
+        r"^(i\s+)?(really\s+)?appreciate(\s+it)?$",
+        r"^thank you again$",
+        r"^thanks again$",
+        r"^thanks for (the help|everything|that|your help)$",
+        r"^thank you for (the help|everything|that|your help)$",
+    ]
+    return any(re.match(p, t) for p in thank_patterns)
 # for events
 EVENTS_TRIGGER = re.compile(
     r"\b(next|events|event|upcoming|today|todays|tomorrow|schedule|vs|versus|week|weekend|happening|going on)\b",
@@ -71,7 +101,7 @@ prompt_template = ChatPromptTemplate.from_messages([
      "RULES:\n"
      "- If the answer is in the context → answer clearly and concisely.\n"
      "- If the question is a greeting (hi, hello, hey, etc.) → respond friendly and invite a real question.\n"
-     "- If the answer is NOT in the context and NOT a greeting → say: 'I don't know. Try asking about dining, housing, athletics, or MyQ.'\n"
+     "- If the answer is NOT in the context and NOT a greeting → briefly say you do not have that in the provided Quinnipiac resources, then point the student to the most relevant campus area (dining, housing, athletics, MyQ, careers, events, health/wellness, etc.) in one short sentence. Do not invent facts or links.\n"
      "- NEVER make up information.\n"
      "- ALWAYS be helpful and positive.\n"
      "- NEVER make up or modify the links given, provide the exact link without any adjustments.\n"
@@ -153,9 +183,15 @@ def answer_with_rag(question: str) -> dict:
     if GREETINGS_LIST.search(question.strip()):
         return {"reply": "Hi! I'm QChat. Ask me anything about Quinnipiac!", "sources": []}
 
+    if _is_thanks_only_message(question):
+        return {"reply": _THANKS_REPLY_TEXT, "sources": []}
+
     docs = retrieve(question, k=6)
     # failure to retrieve docs
     if not docs:
+        redirect = get_topic_redirect(question)
+        if redirect:
+            return redirect
         return {
             "reply": "I don't know, not in the provided resources",
             "sources": [],
@@ -178,6 +214,9 @@ def answer_with_rag(question: str) -> dict:
     ).content.strip()
     reply_text = sanitize_text(reply_text)
     reply_text = format_reply(reply_text)
+    redirect = get_topic_redirect(question)
+    if redirect and looks_like_idk_reply(reply_text):
+        return {"reply": redirect["reply"], "sources": redirect["sources"]}
     # retrun reply
     return{"reply": reply_text, "sources": sources[:5]}
 
@@ -360,55 +399,56 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     # FAQ matcher logic + RAG fallback
     try:
-        # First control FAQ if enabled
-        faq_result = None
-        if QCHAT_FAQ_FIRST:
-            print(f"Checking FAQ for: {msg}")
-            faq_result = check_faq_by_keywords(msg)
-        
-        # if FAQ found use it , else use RAG
-        if faq_result:
-            print(f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}")
+        if _is_thanks_only_message(msg):
             reply = {
-                "reply": faq_result.get("reply"),
-                "sources": faq_result.get("sources", []),
-                "source": "faq",
-                "category": faq_result.get("category"),
-                "faqScore": faq_result.get("faqScore"),
+                "reply": _THANKS_REPLY_TEXT,
+                "sources": [],
+                "source": "thanks",
             }
-        # check to use livewhale
-        #elif EVENTS_TRIGGER.search(msg) and (SPORT_WORDS.search(msg) or "athletic" in msg.lower()):
-        elif EVENTS_TRIGGER.search(msg):
-            events = get_upcoming_events(limit=10, query=msg)
+        else:
+            faq_result = None
+            if QCHAT_FAQ_FIRST:
+                print(f"Checking FAQ for: {msg}")
+                faq_result = check_faq_by_keywords(msg)
 
-            if events:
-                reply_text = "Here are upcoming Quinnipiac events:\n\n"
-
-                for e in events:
-                    reply_text += f"• {e['title']}\n  {e['link']}\n\n"
+            if faq_result:
+                print(f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}")
                 reply = {
-                    "reply": reply_text,
-                    "sources": [e["link"] for e in events],
-                    "source": "livewhale",
+                    "reply": faq_result.get("reply"),
+                    "sources": faq_result.get("sources", []),
+                    "source": "faq",
+                    "category": faq_result.get("category"),
+                    "faqScore": faq_result.get("faqScore"),
                 }
+            elif EVENTS_TRIGGER.search(msg):
+                events = get_upcoming_events(limit=10, query=msg)
+
+                if events:
+                    reply_text = "Here are upcoming Quinnipiac events:\n\n"
+
+                    for e in events:
+                        reply_text += f"• {e['title']}\n  {e['link']}\n\n"
+                    reply = {
+                        "reply": reply_text,
+                        "sources": [e["link"] for e in events],
+                        "source": "livewhale",
+                    }
+                else:
+                    print("No livewhale match, using RAG...")
+                    rag_result = answer_with_rag(msg)
+                    reply = {
+                        "reply": rag_result.get("reply", "I don't know."),
+                        "sources": rag_result.get("sources", []),
+                        "source": "rag",
+                    }
             else:
-                # Use RAG because no FAQ match
-                print("No livewhale match, using RAG...")
+                print("No FAQ match, using RAG...")
                 rag_result = answer_with_rag(msg)
                 reply = {
                     "reply": rag_result.get("reply", "I don't know."),
                     "sources": rag_result.get("sources", []),
                     "source": "rag",
                 }
-        else:
-            # Use RAG because no FAQ match
-            print("No FAQ match, using RAG...")
-            rag_result = answer_with_rag(msg)
-            reply = {
-                "reply": rag_result.get("reply", "I don't know."),
-                "sources": rag_result.get("sources", []),
-                "source": "rag",
-            }
     except Exception as e:
         err_msg = repr(e)
         print(f"Error in FAQ/RAG processing: {err_msg}")
