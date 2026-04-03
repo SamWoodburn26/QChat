@@ -13,7 +13,7 @@ export default function QPage(props: { onClose?: () => void }) {
   return (
     <div className={styles.page}>
       <header className={styles.header}>
-        <h1>qChat — Student Help Center</h1>
+        <h1>QChat — Student Help Center</h1>
         <p className={styles.lead}>Find quick answers, resources, and contact points for university services.</p>
         
         <div className={styles.headerButtons}>
@@ -57,7 +57,7 @@ export default function QPage(props: { onClose?: () => void }) {
 
         <section className={styles.cardFull}>
           <h2>Search the Knowledge Base</h2>
-          <p>Type a question and qChat will suggest relevant articles and contacts.</p>
+          <p>Type a question and QChat will suggest relevant articles and contacts.</p>
           <div className={styles.searchRow}>
             <input className={styles.searchInput} placeholder="Search help…" />
             <button className={styles.searchBtn}>Search</button>
@@ -66,7 +66,7 @@ export default function QPage(props: { onClose?: () => void }) {
       </main>
 
       <footer className={styles.footer}>
-        <small>© {new Date().getFullYear()} Quinnipiac University — qChat</small>
+        <small>© {new Date().getFullYear()} Quinnipiac University — QChat</small>
       </footer>
     </div>
   );

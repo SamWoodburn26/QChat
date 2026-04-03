@@ -504,7 +504,7 @@ export default function QChat() {
         </div>
         <div className={styles.titleLogo}>
           <img className={styles.bobcatImage} src={bobcatImage} alt="Bobcat mascot" />
-          <div className={styles.brandTitle}>QCHAT</div>
+          <div className={styles.brandTitle}>QChat</div>
           <img className={styles.tmImg} src={TMImage} alt="Trademark symbol" />
         </div>
       </header>
