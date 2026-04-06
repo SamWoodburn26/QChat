@@ -2,10 +2,11 @@ import os
 
 from pymongo import MongoClient, ASCENDING
 from pymongo.errors import CollectionInvalid
-from dotenv import load_dotenv
 import certifi
 
-load_dotenv()
+from env_loader import load_backend_env
+
+load_backend_env()
 
 class Database:
     _instance = None

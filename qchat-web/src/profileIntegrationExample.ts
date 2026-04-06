@@ -5,7 +5,7 @@
  * Add these functions to your chat component or create a separate profile service.
  */
 
-const API_BASE_URL = 'http://localhost:7071/api'; // Update with your backend URL
+const API_BASE_URL = import.meta.env.DEV ? '/api' : 'http://localhost:7071/api';
 
 // ===== Profile API Functions =====
 

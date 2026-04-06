@@ -9,6 +9,10 @@ from typing import List, Optional, Tuple
 import requests
 import bs4
 
+from env_loader import load_backend_env
+
+load_backend_env()
+
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.vectorstores import FAISS
@@ -29,6 +33,8 @@ SLEEP_SECONDS = float(os.getenv("QCHAT_SLEEP_SECONDS", "0.5"))
 CHUNK_SIZE = int(os.getenv("QCHAT_CHUNK_SIZE", "1000"))
 CHUNK_OVERLAP = int(os.getenv("QCHAT_CHUNK_OVERLAP", "150"))
 EMBED_MODEL = os.getenv("QCHAT_EMBED_MODEL", "nomic-embed-text")
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
+
 
 # If you want to reject irrelevant retrievals in chat:
 USE_SCORE_THRESHOLD = os.getenv("QCHAT_USE_SCORE_THRESHOLD", "false").lower() == "true"
@@ -36,6 +42,35 @@ USE_SCORE_THRESHOLD = os.getenv("QCHAT_USE_SCORE_THRESHOLD", "false").lower() ==
 SCORE_THRESHOLD = float(os.getenv("QCHAT_SCORE_THRESHOLD", "0.9"))
 
 DEBUG_RETRIEVAL = os.getenv("QCHAT_DEBUG_RETRIEVAL", "false").lower() == "true"
+
+
+def _safe_log(*parts) -> None:
+    """Log text safely on Windows consoles that may default to cp1252."""
+    text = " ".join(str(p) for p in parts)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        print(text.encode("ascii", "backslashreplace").decode("ascii"))
+
+
+def _question_keywords(question: str) -> List[str]:
+    tokens = re.findall(r"[a-zA-Z0-9]+", question.lower())
+    return [t for t in tokens if len(t) >= 3]
+
+
+def _keyword_overlap_score(question: str, doc: Document) -> int:
+    keywords = _question_keywords(question)
+    if not keywords:
+        return 0
+    haystack = (doc.page_content[:1500] + " " + str(doc.metadata.get("source", ""))).lower()
+    return sum(1 for kw in set(keywords) if kw in haystack)
+
+
+def _rerank_by_keyword_overlap(question: str, docs: List[Document], k: int) -> List[Document]:
+    if not docs:
+        return docs
+    ranked = sorted(docs, key=lambda d: _keyword_overlap_score(question, d), reverse=True)
+    return ranked[:k]
 
 
 def read_urls(txt_path: Path = DEFAULT_URLS_TXT) -> List[str]:
@@ -100,7 +135,7 @@ def build_index(urls_txt: Path = DEFAULT_URLS_TXT, index_dir: Path = DEFAULT_IND
     if max_urls is not None:
         urls = urls[:max_urls]
 
-    embeddings = OllamaEmbeddings(model=EMBED_MODEL)
+    embeddings = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_URL)
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
@@ -109,7 +144,7 @@ def build_index(urls_txt: Path = DEFAULT_URLS_TXT, index_dir: Path = DEFAULT_IND
     docs: List[Document] = []
     ok = 0
     # loop through each url and build index
-    print(f"[RAG] Building index from {len(urls)} URLs...")
+    _safe_log(f"[RAG] Building index from {len(urls)} URLs...")
     for i, url in enumerate(urls):
         try:
             # get text from the url
@@ -121,7 +156,7 @@ def build_index(urls_txt: Path = DEFAULT_URLS_TXT, index_dir: Path = DEFAULT_IND
             ok += 1
         # if you cant fetch content from the url
         except Exception as e:
-            print(f"[RAG] fetch failed: {url} | {repr(e)}")
+            _safe_log(f"[RAG] fetch failed: {url} | {repr(e)}")
         # sleep
         if SLEEP_EVERY_N and (i + 1) % SLEEP_EVERY_N == 0:
             time.sleep(SLEEP_SECONDS)
@@ -130,19 +165,19 @@ def build_index(urls_txt: Path = DEFAULT_URLS_TXT, index_dir: Path = DEFAULT_IND
         raise RuntimeError("[RAG] No documents ingested. Check URLs and scraping access.")
     # split into chunks
     splits = splitter.split_documents(docs)
-    print(f"[RAG] Ingested pages: {ok} | Chunks: {len(splits)}")
+    _safe_log(f"[RAG] Ingested pages: {ok} | Chunks: {len(splits)}")
     # build + save
     store = FAISS.from_documents(splits, embeddings)
     index_dir.mkdir(parents=True, exist_ok=True)
     store.save_local(str(index_dir))
-    print(f"[RAG] Saved FAISS index to: {index_dir}")
+    _safe_log(f"[RAG] Saved FAISS index to: {index_dir}")
     # return num_pages_ingested and num_chunks
     return ok, len(splits)
 
 
 # load the faiss index from disk
 def load_index(index_dir: Path = DEFAULT_INDEX_DIR) -> FAISS:
-    embeddings = OllamaEmbeddings(model=EMBED_MODEL)
+    embeddings = OllamaEmbeddings(model=EMBED_MODEL, base_url=OLLAMA_URL)
     return FAISS.load_local(
         str(index_dir),
         embeddings,
@@ -164,28 +199,53 @@ def get_vector_store(index_dir: Path = DEFAULT_INDEX_DIR) -> FAISS:
                 f"Run build_index() first (nightly job) or build locally."
             )
         _VECTOR_STORE = load_index(index_dir)
-        print("[RAG] FAISS index loaded.")
+        _safe_log("[RAG] FAISS index loaded.")
     return _VECTOR_STORE
 
 
 def retrieve(question: str, k: int = 6) -> List[Document]:
     store = get_vector_store()
+    # Pull a wider candidate pool first, then rerank down to k.
+    candidate_k = max(k * 4, 12)
+
+    def _doc_key(doc: Document) -> str:
+        source = str(doc.metadata.get("source", ""))
+        preview = doc.page_content[:180]
+        return f"{source}|{preview}"
+
     if USE_SCORE_THRESHOLD:
-        docs_and_scores = store.similarity_search_with_score(question, k=k)
-        filtered = [d for (d, score) in docs_and_scores if score < SCORE_THRESHOLD]
+        docs_and_scores = store.similarity_search_with_score(question, k=candidate_k)
+
+        # Deduplicate candidates while preserving best (lowest) score per doc key.
+        best_scores = {}
+        for doc, score in docs_and_scores:
+            key = _doc_key(doc)
+            if key not in best_scores or score < best_scores[key][1]:
+                best_scores[key] = (doc, score)
+
+        unique_scored = list(best_scores.values())
+        filtered = [d for (d, score) in unique_scored if score < SCORE_THRESHOLD]
+        filtered = _rerank_by_keyword_overlap(question, filtered, k)
         if DEBUG_RETRIEVAL:
-            for d, score in docs_and_scores:
-                print("\n--- RETRIEVED ---")
-                print("score:", score, "source:", d.metadata.get("source"))
-                print(d.page_content[:350])
+            for d, score in unique_scored[:candidate_k]:
+                _safe_log("\n--- RETRIEVED ---")
+                _safe_log("score:", score, "source:", d.metadata.get("source"))
+                _safe_log(d.page_content[:350])
         return filtered[:k]
     else:
-        docs = store.similarity_search(question, k=k)
+        all_docs: List[Document] = store.similarity_search(question, k=candidate_k)
+
+        deduped = {}
+        for doc in all_docs:
+            deduped[_doc_key(doc)] = doc
+
+        docs = list(deduped.values())
+        docs = _rerank_by_keyword_overlap(question, docs, k)
         if DEBUG_RETRIEVAL:
             for d in docs:
-                print("\n--- RETRIEVED ---")
-                print("source:", d.metadata.get("source"))
-                print(d.page_content[:350])
+                _safe_log("\n--- RETRIEVED ---")
+                _safe_log("source:", d.metadata.get("source"))
+                _safe_log(d.page_content[:350])
         return docs
     
 # 

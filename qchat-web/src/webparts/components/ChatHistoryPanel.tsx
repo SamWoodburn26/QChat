@@ -1,4 +1,3 @@
-import * as React from 'react';
 import styles from './ChatHistoryPanel.module.css';
 
 type Msg = { role: 'user' | 'assistant'; text: string };

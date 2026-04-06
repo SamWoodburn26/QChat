@@ -1,9 +1,15 @@
 # ollama to make the gemma model
 import azure.functions as func
 import json, os, re
+import sys
 from datetime import datetime
 from pymongo import MongoClient
 import certifi
+
+from env_loader import load_backend_env
+
+load_backend_env()
+
 # for llm
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_ollama import ChatOllama
@@ -18,6 +24,30 @@ from .faq_matcher import check_faq_by_keywords
 from .profanity_filter import sanitize_text
 from .RAG import retrieve
 from .livewhale import get_upcoming_events
+
+
+def _configure_console_encoding() -> None:
+    """Avoid Windows cp1252 crashes when logging non-ASCII retrieval text."""
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            try:
+                stream.reconfigure(encoding="utf-8", errors="backslashreplace")
+            except Exception:
+                # Best-effort only; fallback safe logging still handles failures.
+                pass
+
+
+def _safe_log(*parts) -> None:
+    """Log without raising UnicodeEncodeError on Windows consoles."""
+    text = " ".join(str(p) for p in parts)
+    try:
+        print(text)
+    except UnicodeEncodeError:
+        # Last-resort fallback if stream encoding cannot print certain characters.
+        print(text.encode("ascii", "backslashreplace").decode("ascii"))
+
+
+_configure_console_encoding()
 
 # MongoDB Configuration
 MONGO_URI = os.environ.get('MONGODB_URI') or os.getenv('MONGODB_URI')
@@ -119,7 +149,7 @@ def _init_db_once():
         db = mongo_client[DATABASE_NAME]
         _db_ready = True
     except Exception as e:
-        print("Mongo one-time init failed:", repr(e))
+        _safe_log("Mongo one-time init failed:", repr(e))
         mongo_client = None
         db = None
         _db_ready = False
@@ -219,7 +249,7 @@ def _get_recent_conversation_history(username: str, limit: int = 10) -> list:
         return history
         
     except Exception as e:
-        print(f"Error retrieving conversation history: {repr(e)}")
+        _safe_log(f"Error retrieving conversation history: {repr(e)}")
         return []
 
 
@@ -248,14 +278,14 @@ def _smart_extract_and_save_profile(username: str, user_message: str, bot_reply:
         if extracted.get("extracted"):
             updated = apply_extracted_info_to_profile(username, extracted, profile_service)
             if updated:
-                print(f"✓ Smart extraction updated profile for {username}")
+                _safe_log(f"✓ Smart extraction updated profile for {username}")
             else:
-                print(f"No new information to add for {username}")
+                _safe_log(f"No new information to add for {username}")
         else:
-            print(f"No profile information detected in conversation for {username}")
+            _safe_log(f"No profile information detected in conversation for {username}")
             
     except Exception as e:
-        print(f"Error in smart profile extraction: {repr(e)}")
+        _safe_log(f"Error in smart profile extraction: {repr(e)}")
         import traceback
         traceback.print_exc()
 
@@ -268,7 +298,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             with open(maintenance_file, 'r') as f:
                 maintenance_status = json.load(f)
                 if maintenance_status.get('enabled', False):
-                    print('Chat request BLOCKED - Maintenance mode enabled')
+                    _safe_log('Chat request BLOCKED - Maintenance mode enabled')
                     response = func.HttpResponse(
                         json.dumps({
                             "error": "maintenance_mode",
@@ -282,7 +312,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     response.headers["Access-Control-Allow-Headers"] = "Content-Type"
                     return response
     except Exception as e:
-        print(f'Error checking maintenance mode: {str(e)}')
+        _safe_log(f'Error checking maintenance mode: {str(e)}')
     
     if req.method == "OPTIONS":
         response = func.HttpResponse("")
@@ -291,7 +321,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         return response
     
-    print("main called")
+    _safe_log("main called")
     
     try:
         body = req.get_json()
@@ -310,7 +340,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         try:
             ensure_profile_exists(username)
         except Exception as e:
-            print(f"Error ensuring profile exists for {username}: {repr(e)}")
+            _safe_log(f"Error ensuring profile exists for {username}: {repr(e)}")
     
     # For now, treat any action as 'chat' (backward compatibility)
     if action == "health":
@@ -363,12 +393,12 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         # First control FAQ if enabled
         faq_result = None
         if QCHAT_FAQ_FIRST:
-            print(f"Checking FAQ for: {msg}")
+            _safe_log(f"Checking FAQ for: {msg}")
             faq_result = check_faq_by_keywords(msg)
         
         # if FAQ found use it , else use RAG
         if faq_result:
-            print(f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}")
+            _safe_log(f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}")
             reply = {
                 "reply": faq_result.get("reply"),
                 "sources": faq_result.get("sources", []),
@@ -393,7 +423,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 }
             else:
                 # Use RAG because no FAQ match
-                print("No livewhale match, using RAG...")
+                _safe_log("No livewhale match, using RAG...")
                 rag_result = answer_with_rag(msg)
                 reply = {
                     "reply": rag_result.get("reply", "I don't know."),
@@ -402,7 +432,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 }
         else:
             # Use RAG because no FAQ match
-            print("No FAQ match, using RAG...")
+            _safe_log("No FAQ match, using RAG...")
             rag_result = answer_with_rag(msg)
             reply = {
                 "reply": rag_result.get("reply", "I don't know."),
@@ -411,7 +441,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             }
     except Exception as e:
         err_msg = repr(e)
-        print(f"Error in FAQ/RAG processing: {err_msg}")
+        _safe_log(f"Error in FAQ/RAG processing: {err_msg}")
         # Surface error to user so they can fix (e.g. model not found, connection refused)
         reply = {
             "reply": f"I don't know. (Backend error: {err_msg})",
@@ -442,8 +472,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
             }
             
             db[CHAT_LOGS_COLLECTION].insert_one(log_doc)
-            print("inserting to mongo")
+            _safe_log("inserting to mongo")
         except Exception as e:
-            print("Mongo insert error:", repr(e))
+            _safe_log("Mongo insert error:", repr(e))
 
     return response

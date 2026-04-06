@@ -6,6 +6,10 @@ from pymongo import MongoClient
 import certifi
 import hashlib
 
+from env_loader import load_backend_env
+
+load_backend_env()
+
 # MongoDB Configuration
 MONGO_URI = os.environ.get('MONGODB_URI') or os.getenv('MONGODB_URI')
 DATABASE_NAME = os.environ.get('DB_NAME', 'chatbot_db')

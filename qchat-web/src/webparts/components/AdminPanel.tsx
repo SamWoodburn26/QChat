@@ -1,8 +1,8 @@
 import * as React from 'react';
 import styles from './AdminPanel.module.css';
-import localSettings from '../../backend/local.settings.json';
 
-const llm_base = localSettings.Values.SERVER_URL || 'http://localhost:7071';
+const configuredServerUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:7071';
+const llm_base = import.meta.env.DEV ? '' : configuredServerUrl;
 
 
 type Tab = 'urls' | 'users' | 'backend';
