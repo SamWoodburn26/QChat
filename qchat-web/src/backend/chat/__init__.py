@@ -24,6 +24,7 @@ from .faq_matcher import check_faq_by_keywords
 from .profanity_filter import sanitize_text
 from .RAG import retrieve
 from .livewhale import get_upcoming_events
+from .qu_topic_redirects import get_topic_redirect, looks_like_idk_reply
 
 
 def _configure_console_encoding() -> None:
@@ -428,55 +429,57 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
 
     # FAQ matcher logic + RAG fallback
     try:
-        # First control FAQ if enabled
-        faq_result = None
-        if QCHAT_FAQ_FIRST:
-            _safe_log(f"Checking FAQ for: {msg}")
-            faq_result = check_faq_by_keywords(msg)
-        
-        # if FAQ found use it , else use RAG
-        if faq_result:
-            _safe_log(f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}")
+        if _is_thanks_only_message(msg):
             reply = {
-                "reply": faq_result.get("reply"),
-                "sources": faq_result.get("sources", []),
-                "source": "faq",
-                "category": faq_result.get("category"),
-                "faqScore": faq_result.get("faqScore"),
+                "reply": _THANKS_REPLY_TEXT,
+                "sources": [],
+                "source": "thanks",
             }
-        # check to use livewhale
-        #elif EVENTS_TRIGGER.search(msg) and (SPORT_WORDS.search(msg) or "athletic" in msg.lower()):
-        elif EVENTS_TRIGGER.search(msg):
-            events = get_upcoming_events(limit=10, query=msg)
+        else:
+            faq_result = None
+            if QCHAT_FAQ_FIRST:
+                _safe_log(f"Checking FAQ for: {msg}")
+                faq_result = check_faq_by_keywords(msg)
+
+            if faq_result:
+                _safe_log(
+                    f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}"
+                )
+                reply = {
+                    "reply": faq_result.get("reply"),
+                    "sources": faq_result.get("sources", []),
+                    "source": "faq",
+                    "category": faq_result.get("category"),
+                    "faqScore": faq_result.get("faqScore"),
+                }
+            elif EVENTS_TRIGGER.search(msg):
+                events = get_upcoming_events(limit=10, query=msg)
 
                 if events:
                     reply_text = "Here are upcoming Quinnipiac events:\n\n"
-
-                for e in events:
-                    reply_text += f"• {e['title']}\n  {e['link']}\n\n"
-                reply = {
-                    "reply": reply_text,
-                    "sources": [e["link"] for e in events],
-                    "source": "livewhale",
-                }
+                    for e in events:
+                        reply_text += f"• {e['title']}\n  {e['link']}\n\n"
+                    reply = {
+                        "reply": reply_text,
+                        "sources": [e["link"] for e in events],
+                        "source": "livewhale",
+                    }
+                else:
+                    _safe_log("No livewhale match, using RAG...")
+                    rag_result = answer_with_rag(msg)
+                    reply = {
+                        "reply": rag_result.get("reply", "I don't know."),
+                        "sources": rag_result.get("sources", []),
+                        "source": "rag",
+                    }
             else:
-                # Use RAG because no FAQ match
-                _safe_log("No livewhale match, using RAG...")
+                _safe_log("No FAQ match, using RAG...")
                 rag_result = answer_with_rag(msg)
                 reply = {
                     "reply": rag_result.get("reply", "I don't know."),
                     "sources": rag_result.get("sources", []),
                     "source": "rag",
                 }
-        else:
-            # Use RAG because no FAQ match
-            _safe_log("No FAQ match, using RAG...")
-            rag_result = answer_with_rag(msg)
-            reply = {
-                "reply": rag_result.get("reply", "I don't know."),
-                "sources": rag_result.get("sources", []),
-                "source": "rag",
-            }
     except Exception as e:
         err_msg = repr(e)
         _safe_log(f"Error in FAQ/RAG processing: {err_msg}")

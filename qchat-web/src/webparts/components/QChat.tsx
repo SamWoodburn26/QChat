@@ -452,67 +452,6 @@ export default function QChat() {
     window.addEventListener('message', messageHandler);
   }
 
-  function handleGoogleLogin() {
-    const clientId = '590552919397-6bp7ppthi11rgoiiehrj0jvi0apf3ltm.apps.googleusercontent.com';
-    const redirectUri = encodeURIComponent(window.location.origin + '/google-callback.html');
-    const scope = encodeURIComponent('openid profile email');
-    const responseType = 'id_token';
-    const nonce = Math.random().toString(36).substring(2);
-    
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-      `client_id=${clientId}` +
-      `&response_type=${responseType}` +
-      `&redirect_uri=${redirectUri}` +
-      `&scope=${scope}` +
-      `&nonce=${nonce}`;
-    
-    const popup = window.open(authUrl, 'Google Login', 'width=500,height=600');
-    
-    const messageHandler = async (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      
-      if (event.data.type === 'google-login') {
-        popup?.close();
-        window.removeEventListener('message', messageHandler);
-        
-        const { email, name } = event.data;
-        
-        try {
-          const response = await fetch(`${llm_base}/api/auth`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'google_login',
-              username: email,
-              name: name
-            })
-          });
-
-          const data = await response.json();
-          
-          if (data.success) {
-            setCurrentUser(name || email);
-            localStorage.setItem('username', data.username);
-            localStorage.setItem('name', data.name);
-            localStorage.setItem('role', data.role);
-            setIsAdmin(data.role === 'admin');
-            setIsTeacher(data.role === 'teacher');
-            
-            await loadConversationsFromDb(email);
-            setLoginOpen(false);
-          } else {
-            alert(data.error || 'Google login failed');
-          }
-        } catch (err) {
-          console.error('Google login error:', err);
-          alert('Google login failed. Please try again.');
-        }
-      }
-    };
-    
-    window.addEventListener('message', messageHandler);
-  }
-
   // if (showPage) {
   //   return <QPage onClose={() => setShowPage(false)} />;
   // }
@@ -542,7 +481,6 @@ export default function QChat() {
         onLogin={handleLogin}
         onRegister={handleRegister}
         onMicrosoftLogin={handleMicrosoftLogin}
-        onGoogleLogin={handleGoogleLogin}
         onLogout={handleLogout}
       />
       <header className={styles.headerBar}>
