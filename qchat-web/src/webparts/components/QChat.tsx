@@ -9,7 +9,7 @@ import bobcatImage from '../assets/Bobcat.png';
 import AdminPanel from './AdminPanel';
 import TeacherPanel from './TeacherPanel';
 
-type Msg = { role: 'user' | 'assistant'; text: string };
+type Msg = { role: 'user' | 'assistant'; text: string; source?: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
 
 const configuredServerUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:7071';
@@ -135,7 +135,7 @@ export default function QChat() {
     if (!input.trim()) return;
     const msg = input.trim();
 
-    const user = { role: 'user' as const, text: input.trim() };
+    const user: Msg = { role: 'user', text: input.trim() };
     setMsgs(m => [...m, user]);
     setInput('');
 
@@ -150,6 +150,13 @@ export default function QChat() {
     try {
       const senderName = localStorage.getItem('name') || currentUser || '';
       const role = localStorage.getItem('role') || '';
+
+      const recentHistory = [...msgs, user].slice(-6).map((m) => ({
+        role: m.role,
+        text: m.text,
+        ...(m.source ? { source: m.source } : {}),
+      }));
+
       const result = await fetch(`${llm_base}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -160,6 +167,7 @@ export default function QChat() {
           message: msg,
           role,
           senderName,
+          history: recentHistory,
         }),
       });
 
@@ -169,6 +177,7 @@ export default function QChat() {
 
       const data = await result.json();
       const reply = data.reply || '(no reply)';
+      const replySource: string = data.source || '';
       const sources: string[] = Array.isArray(data.sources) ? data.sources : [];
 
       let text = reply;
@@ -184,12 +193,9 @@ export default function QChat() {
           })
           .join('');
         text += '<br/><br/><strong>Sources:</strong><ul>' + links + '</ul>';
-        /*const top_two = sources.slice(0, 2);
-        const links = top_two.map(src => `<a g>${src}</a>`).join('<br>');
-        text += '<br/><br/><strong>Sources:</strong><br/> ' + links; */
       }
 
-      const assistant: Msg = { role: 'assistant', text };
+      const assistant: Msg = { role: 'assistant', text, ...(replySource ? { source: replySource } : {}) };
       setMsgs(m => [...m, assistant]);
 
       if (!currentConvId) {

@@ -106,6 +106,7 @@ EVENTS_TRIGGER = re.compile(
     re.I,
 )
 SPORT_WORDS = re.compile(r"\b(basketball|hockey|soccer|baseball|softball|volleyball|lacrosse)\b", re.I)
+
 EMAIL_COMMAND_TRIGGER = re.compile(
     r"(?:\b(send|write|compose|draft)\b[^\n]{0,40}\bemail\b)|(?:\bemail\b[^\n]{0,20}\bto\b)",
     re.I,
@@ -117,6 +118,11 @@ EMAIL_BODY_RE = re.compile(r"\b(?:body|message)\s*:\s*(.+)$", re.I | re.S)
 EMAIL_TELL_RE = re.compile(r"\b(?:telling|tell)\s+(?:them|him|her)\b\s*(?:that)?\s*(.+)$", re.I | re.S)
 EMAIL_SAYING_RE = re.compile(r"\bsay(?:ing)?\b\s*(?:that)?\s*(.+)$", re.I | re.S)
 SAME_RECIPIENT_RE = re.compile(r"\b(?:same\s+(?:account|email|address|recipient)|that\s+(?:same\s+)?(?:account|email|address|recipient))\b", re.I)
+
+FINAL_EXAM_QUERY = re.compile(
+    r"\b(final|finals|final exam|final exams|exam period|exam week)\b",
+    re.I,
+)
 
 
 #Enable FAQ priority: check FAQs before calling RAG
@@ -148,6 +154,7 @@ prompt_template = ChatPromptTemplate.from_messages([
      "- ALWAYS be helpful and positive.\n"
      "- NEVER make up or modify the links given, provide the exact link without any adjustments.\n"
      "- assume the student is an undergraduate living on Mount Carmel, unless otherwise told. \n"
+     "- Use the conversation history to understand follow-up questions in context.\n"
      "Formatting rules:\n"
      "- Use short paragraphs\n"
      "- Use bullet points for lists\n"
@@ -157,7 +164,7 @@ prompt_template = ChatPromptTemplate.from_messages([
      "- When there is a numbered list seperate each number with a new line\n"
      "- Do not include empty parentheses\n"
      "- Do not include citations or URLs inside the answer. I will display sources separately."),
-    ("human", "Context:\n{context}\n\nUser: {question}")
+    ("human", "Context:\n{context}\n\nConversation history:\n{history}\n\nUser: {question}")
 ])
 
 email_extraction_prompt = ChatPromptTemplate.from_messages([
@@ -185,6 +192,134 @@ email_extraction_prompt = ChatPromptTemplate.from_messages([
         "- 'Can you send emails?' -> send_email=false."
     ),
 ])
+
+# prompt for ambiguity detection on short/vague queries
+_ambiguity_prompt = ChatPromptTemplate.from_messages([
+    ("system",
+     "You are a query analyzer for a university chatbot. "
+     "Your ONLY job is to determine if a student's question is ambiguous — "
+     "meaning it could reasonably refer to multiple different topics at a university.\n\n"
+     "Examples of ambiguous queries:\n"
+     "- 'finals' → could mean final exams or sports finals/championships\n"
+     "- 'registration' → could mean course registration, event registration, or orientation registration\n"
+     "- 'drop' → could mean dropping a class, drop-in hours, or drop-off locations\n"
+     "- 'application' → could mean college application, job application, or software application\n\n"
+     "Examples of clear queries (NOT ambiguous):\n"
+     "- 'when is the final exam for biology' → clearly about exams\n"
+     "- 'what are the dining hall hours' → clearly about dining\n"
+     "- 'basketball schedule' → clearly about sports\n"
+     "- 'hi' or 'hello' → greetings are never ambiguous\n"
+     "- 'thanks' → gratitude is never ambiguous\n\n"
+     "Also consider the conversation history. If a previous message already "
+     "clarified the topic, the follow-up is NOT ambiguous.\n\n"
+     "If the query IS ambiguous, respond with ONLY a short, friendly clarifying question "
+     "(e.g., 'Are you asking about final exams or sports finals/championships?').\n"
+     "If the query is NOT ambiguous, respond with ONLY the word: CLEAR"),
+    ("human", "Conversation history:\n{history}\n\nNew message: {message}")
+])
+
+
+def detect_ambiguity(message: str, history_text: str = "") -> str | None:
+    """
+    Returns a clarifying question if the message is ambiguous,
+    or None if it's clear enough to answer directly.
+    Only called for short queries (<=5 words) to avoid unnecessary LLM calls.
+    """
+    try:
+        result = llm.invoke(
+            _ambiguity_prompt.invoke({"message": message, "history": history_text})
+        ).content.strip()
+        if result.lower().startswith("ambiguous:"):
+            result = result.split(":", 1)[1].strip()
+
+        if result.upper().startswith("CLEAR"):
+            return None
+        return result
+    except Exception as e:
+        print(f"Ambiguity detection error: {repr(e)}")
+        return None
+
+
+def _format_history_text(history: list) -> str:
+    """Format conversation history list into a readable string for LLM prompts."""
+    if not history:
+        return "(no prior messages)"
+    lines = []
+    for m in history[-6:]:
+        role = "User" if m.get("role") == "user" else "QChat"
+        lines.append(f"{role}: {m.get('text', '')}")
+    return "\n".join(lines)
+
+
+def _is_final_exam_query(question: str) -> bool:
+    """Detect questions likely about undergraduate final-exam timing/schedule."""
+    q = (question or "").lower()
+    if not q:
+        return False
+    if not FINAL_EXAM_QUERY.search(q):
+        return False
+    if SPORT_WORDS.search(q):
+        return False
+    return True
+
+
+def _mentions_law_or_medicine(question: str) -> bool:
+    q = (question or "").lower()
+    return any(term in q for term in ["law", "school of law", "medicine", "medical", "netter"])
+
+
+def _build_final_exam_retrieval_query(question: str) -> str:
+    """Bias retrieval toward the main QU academic calendar finals window."""
+    return (
+        f"{question} "
+        "quinnipiac undergraduate academic calendar final exam period mount carmel "
+        "spring semester finals dates"
+    ).strip()
+
+
+def _rerank_docs_for_final_exams(docs: list) -> list:
+    """Prioritize academic-calendar pages and downrank medicine/law pages for finals-date questions."""
+    def score_doc(d) -> int:
+        source = (d.metadata.get("source") or "").lower()
+        score = 0
+        if "academic-calendar" in source:
+            score += 100
+        if "/academics/" in source:
+            score += 15
+        if "medicine.qu.edu" in source or "/admissions/medicine" in source:
+            score -= 40
+        if "law.qu.edu" in source:
+            score -= 20
+        return score
+
+    return sorted(docs, key=score_doc, reverse=True)
+
+
+def _latest_assistant_before_current_user(history: list) -> tuple[dict | None, int]:
+    """
+    Return the latest assistant message and index.
+    If the current user message is already included at the end of history,
+    search starting from the prior index.
+    """
+    if not history:
+        return None, -1
+
+    start = len(history) - 1
+    if history[-1].get("role") == "user":
+        start -= 1
+
+    for i in range(start, -1, -1):
+        if history[i].get("role") == "assistant":
+            return history[i], i
+    return None, -1
+
+
+def _latest_user_before_index(history: list, index: int) -> dict | None:
+    """Return the latest user message before a given history index."""
+    for i in range(index - 1, -1, -1):
+        if history[i].get("role") == "user":
+            return history[i]
+    return None
 
 # intiialize database connnection
 def _init_db_once():
@@ -246,7 +381,7 @@ def format_reply(text: str) -> str:
     return t.strip()
 
 # to answer with rag
-def answer_with_rag(question: str) -> dict:
+def answer_with_rag(question: str, history_text: str = "", apply_final_exam_boost: bool = False) -> dict:
     # handle greeting
     if GREETINGS_LIST.search(question.strip()):
         return {"reply": "Hi! I'm QChat. Ask me anything about Quinnipiac!", "sources": []}
@@ -254,7 +389,21 @@ def answer_with_rag(question: str) -> dict:
     if _is_thanks_only_message(question):
         return {"reply": _THANKS_REPLY_TEXT, "sources": []}
 
-    docs = retrieve(question, k=6)
+    use_final_exam_boost = apply_final_exam_boost or _is_final_exam_query(question)
+    allow_professional_school_content = _mentions_law_or_medicine(question)
+    retrieval_query = _build_final_exam_retrieval_query(question) if use_final_exam_boost else question
+    docs = retrieve(retrieval_query, k=10 if use_final_exam_boost else 6)
+    if use_final_exam_boost and docs:
+        docs = _rerank_docs_for_final_exams(docs)[:6]
+        if not allow_professional_school_content:
+            docs = [
+                d for d in docs
+                if "law.qu.edu" not in (d.metadata.get("source") or "").lower()
+                and "medicine.qu.edu" not in (d.metadata.get("source") or "").lower()
+            ]
+            # Keep a fallback in case filtering becomes too aggressive.
+            if not docs:
+                docs = retrieve(question, k=6)
     # failure to retrieve docs
     if not docs:
         redirect = get_topic_redirect(question)
@@ -277,8 +426,16 @@ def answer_with_rag(question: str) -> dict:
             sources.append(s)
             seen.add(s)
     #get reply
+    llm_question = question
+    if use_final_exam_boost and not allow_professional_school_content:
+        llm_question = (
+            f"{question}\n"
+            "Important: The user did not ask about School of Law or School of Medicine. "
+            "Prioritize undergraduate and graduate on-campus final exam dates from the main QU academic calendar."
+        )
+
     reply_text = llm.invoke(
-        prompt_template.invoke({"context": context, "question": question})
+        prompt_template.invoke({"context": context, "question": llm_question, "history": history_text})
     ).content.strip()
     reply_text = sanitize_text(reply_text)
     reply_text = format_reply(reply_text)
@@ -607,6 +764,42 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     if not msg:
         return func.HttpResponse('{"error":"missing message"}', status_code=400, mimetype="application/json")
 
+    # Extract conversation history sent from the frontend
+    conversation_history = body.get("history", [])
+    history_text = _format_history_text(conversation_history)
+
+    # Detect whether this is a reply to a clarification question
+    latest_assistant, assistant_idx = _latest_assistant_before_current_user(conversation_history)
+    _prev_was_clarification = bool(
+        latest_assistant and latest_assistant.get("source") == "clarification"
+    )
+
+    query_text = msg
+    if _prev_was_clarification and assistant_idx > 0:
+        previous_user = _latest_user_before_index(conversation_history, assistant_idx)
+        if previous_user and previous_user.get("text"):
+            query_text = f"{previous_user.get('text', '').strip()} {msg}".strip()
+            _safe_log(f"Clarification follow-up detected. Expanded query: {query_text}")
+
+    final_exam_intent = _is_final_exam_query(query_text)
+
+    reply = None
+    if (
+        not _is_thanks_only_message(msg)
+        and not GREETINGS_LIST.search(msg.strip())
+        and len(msg.split()) <= 5
+        and not _prev_was_clarification
+    ):
+        _safe_log(f"Short query detected ({len(msg.split())} words), checking ambiguity: {msg}")
+        clarification = detect_ambiguity(msg, history_text)
+        if clarification:
+            _safe_log("Ambiguous query — asking for clarification")
+            reply = {
+                "reply": clarification,
+                "sources": [],
+                "source": "clarification",
+            }
+
     email_request = _extract_email_request(msg, username)
     if email_request is not None:
         if username == "anonymous" or role not in {"teacher", "admin"}:
@@ -631,7 +824,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 )
                 recipients_text = ", ".join(email_request["recipients"])
                 reply = {
-                    "reply": f"I sent the email to {recipients_text} with subject \"{email_request['subject']}\" via {provider}.",
+                    "reply": f'I sent the email to {recipients_text} with subject "{email_request["subject"]}" via {provider}.',
                     "sources": [],
                     "source": "email",
                 }
@@ -644,68 +837,91 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                     "source": "email_error",
                 }
     else:
-        # FAQ matcher logic + RAG fallback
-        try:
-            if _is_thanks_only_message(msg):
-                reply = {
-                    "reply": _THANKS_REPLY_TEXT,
-                    "sources": [],
-                    "source": "thanks",
-                }
-            else:
-                faq_result = None
-                if QCHAT_FAQ_FIRST:
-                    _safe_log(f"Checking FAQ for: {msg}")
-                    faq_result = check_faq_by_keywords(msg)
-
-                if faq_result:
-                    _safe_log(
-                        f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}"
-                    )
+        # FAQ / Events / RAG flow (skip if ambiguity already produced a reply)
+        if reply is None:
+            try:
+                if _is_thanks_only_message(msg):
                     reply = {
-                        "reply": faq_result.get("reply"),
-                        "sources": faq_result.get("sources", []),
-                        "source": "faq",
-                        "category": faq_result.get("category"),
-                        "faqScore": faq_result.get("faqScore"),
+                        "reply": _THANKS_REPLY_TEXT,
+                        "sources": [],
+                        "source": "thanks",
                     }
-                elif EVENTS_TRIGGER.search(msg):
-                    events = get_upcoming_events(limit=10, query=msg)
-
-                    if events:
-                        reply_text = "Here are upcoming Quinnipiac events:\n\n"
-                        for e in events:
-                            reply_text += f"• {e['title']}\n  {e['link']}\n\n"
-                        reply = {
-                            "reply": reply_text,
-                            "sources": [e["link"] for e in events],
-                            "source": "livewhale",
-                        }
-                    else:
-                        _safe_log("No livewhale match, using RAG...")
-                        rag_result = answer_with_rag(msg)
-                        reply = {
-                            "reply": rag_result.get("reply", "I don't know."),
-                            "sources": rag_result.get("sources", []),
-                            "source": "rag",
-                        }
-                else:
-                    _safe_log("No FAQ match, using RAG...")
-                    rag_result = answer_with_rag(msg)
+                elif _prev_was_clarification:
+                    _safe_log("Clarification follow-up: bypassing FAQ/event routing and using RAG")
+                    rag_result = answer_with_rag(
+                        query_text,
+                        history_text,
+                        apply_final_exam_boost=final_exam_intent,
+                    )
                     reply = {
                         "reply": rag_result.get("reply", "I don't know."),
                         "sources": rag_result.get("sources", []),
                         "source": "rag",
                     }
-        except Exception as e:
-            err_msg = repr(e)
-            _safe_log(f"Error in FAQ/RAG processing: {err_msg}")
-            # Surface error to user so they can fix (e.g. model not found, connection refused)
-            reply = {
-                "reply": f"I don't know. (Backend error: {err_msg})",
-                "sources": [],
-                "source": "error",
-            }
+                elif final_exam_intent:
+                    _safe_log("Final-exam intent detected: bypassing FAQ/event routing and using boosted RAG")
+                    rag_result = answer_with_rag(
+                        query_text,
+                        history_text,
+                        apply_final_exam_boost=True,
+                    )
+                    reply = {
+                        "reply": rag_result.get("reply", "I don't know."),
+                        "sources": rag_result.get("sources", []),
+                        "source": "rag",
+                    }
+                else:
+                    faq_result = None
+                    if QCHAT_FAQ_FIRST:
+                        _safe_log(f"Checking FAQ for: {query_text}")
+                        faq_result = check_faq_by_keywords(query_text)
+
+                    if faq_result:
+                        _safe_log(
+                            f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}"
+                        )
+                        reply = {
+                            "reply": faq_result.get("reply"),
+                            "sources": faq_result.get("sources", []),
+                            "source": "faq",
+                            "category": faq_result.get("category"),
+                            "faqScore": faq_result.get("faqScore"),
+                        }
+                    elif EVENTS_TRIGGER.search(query_text):
+                        events = get_upcoming_events(limit=10, query=query_text)
+                        if events:
+                            reply_text = "Here are upcoming Quinnipiac events:\n\n"
+                            for e in events:
+                                reply_text += f"• {e['title']}\n  {e['link']}\n\n"
+                            reply = {
+                                "reply": reply_text,
+                                "sources": [e["link"] for e in events],
+                                "source": "livewhale",
+                            }
+                        else:
+                            _safe_log("No livewhale match, using RAG...")
+                            rag_result = answer_with_rag(query_text, history_text)
+                            reply = {
+                                "reply": rag_result.get("reply", "I don't know."),
+                                "sources": rag_result.get("sources", []),
+                                "source": "rag",
+                            }
+                    else:
+                        _safe_log("No FAQ match, using RAG...")
+                        rag_result = answer_with_rag(query_text, history_text)
+                        reply = {
+                            "reply": rag_result.get("reply", "I don't know."),
+                            "sources": rag_result.get("sources", []),
+                            "source": "rag",
+                        }
+            except Exception as e:
+                err_msg = repr(e)
+                _safe_log(f"Error in FAQ/RAG processing: {err_msg}")
+                reply = {
+                    "reply": f"I don't know. (Backend error: {err_msg})",
+                    "sources": [],
+                    "source": "error",
+                }
 
 
     response = func.HttpResponse(
