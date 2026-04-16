@@ -17,6 +17,7 @@ const llm_base = import.meta.env.DEV ? '' : configuredServerUrl;
 const microsoftClientId = (import.meta.env.VITE_MICROSOFT_CLIENT_ID || '').trim();
 const microsoftTenantId = (import.meta.env.VITE_MICROSOFT_TENANT_ID || 'common').trim();
 const configuredMicrosoftRedirectUri = (import.meta.env.VITE_MICROSOFT_REDIRECT_URI || '').trim();
+const googleClientId = (import.meta.env.VITE_GOOGLE_CLIENT_ID || '').trim();
 
 function randomPkceString(length = 64): string {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
@@ -147,10 +148,19 @@ export default function QChat() {
     setIsLoading(true); 
 
     try {
+      const senderName = localStorage.getItem('name') || currentUser || '';
+      const role = localStorage.getItem('role') || '';
       const result = await fetch(`${llm_base}/api/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'chat', userId: currentUser || 'anonymous', sessionId, message: msg }),
+        body: JSON.stringify({
+          action: 'chat',
+          userId: currentUser || 'anonymous',
+          sessionId,
+          message: msg,
+          role,
+          senderName,
+        }),
       });
 
       if (!result.ok) {
@@ -452,6 +462,71 @@ export default function QChat() {
     window.addEventListener('message', messageHandler);
   }
 
+  function handleGoogleLogin() {
+    if (!googleClientId) {
+      alert('Google login is not configured. Set VITE_GOOGLE_CLIENT_ID in .env.local.');
+      return;
+    }
+
+    const redirectUri = encodeURIComponent(window.location.origin + '/google-callback.html');
+    const scope = encodeURIComponent('openid profile email');
+    const responseType = 'id_token';
+    const nonce = Math.random().toString(36).substring(2);
+
+    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
+      `client_id=${googleClientId}` +
+      `&response_type=${responseType}` +
+      `&redirect_uri=${redirectUri}` +
+      `&scope=${scope}` +
+      `&nonce=${nonce}`;
+
+    const popup = window.open(authUrl, 'Google Login', 'width=500,height=600');
+
+    const messageHandler = async (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+
+      if (event.data.type === 'google-login') {
+        popup?.close();
+        window.removeEventListener('message', messageHandler);
+
+        const { email, name } = event.data;
+
+        try {
+          const response = await fetch(`${llm_base}/api/auth`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              action: 'google_login',
+              username: email,
+              name,
+            })
+          });
+
+          const data = await response.json();
+
+          if (data.success) {
+            setCurrentUser(name || email);
+            localStorage.setItem('username', data.username);
+            localStorage.setItem('name', data.name);
+            localStorage.setItem('role', data.role);
+            setIsAdmin(data.role === 'admin');
+            setIsTeacher(data.role === 'teacher');
+
+            await loadConversationsFromDb(email);
+            setLoginOpen(false);
+          } else {
+            alert(data.error || 'Google login failed');
+          }
+        } catch (err) {
+          console.error('Google login error:', err);
+          alert('Google login failed. Please try again.');
+        }
+      }
+    };
+
+    window.addEventListener('message', messageHandler);
+  }
+
   // if (showPage) {
   //   return <QPage onClose={() => setShowPage(false)} />;
   // }
@@ -481,6 +556,7 @@ export default function QChat() {
         onLogin={handleLogin}
         onRegister={handleRegister}
         onMicrosoftLogin={handleMicrosoftLogin}
+        onGoogleLogin={handleGoogleLogin}
         onLogout={handleLogout}
       />
       <header className={styles.headerBar}>

@@ -86,6 +86,7 @@ function EmailTab() {
     }
 
     setSending(true);
+    const senderName = localStorage.getItem('name') || '';
     try {
       const response = await fetch(`${llm_base}/api/send_mail`, {
         method: 'POST',
@@ -94,6 +95,7 @@ function EmailTab() {
           to,
           subject,
           body,
+          sender_name: senderName,
         }),
       });
 
@@ -106,7 +108,7 @@ function EmailTab() {
       setStatus('Email sent successfully.');
     } catch (error) {
       console.error('Send email error:', error);
-      setStatus('Could not send email. Check backend and Microsoft app permissions.');
+      setStatus('Could not send email. Check backend mail provider configuration.');
     } finally {
       setSending(false);
     }
@@ -179,7 +181,7 @@ function EmailTab() {
 
       <div className={styles.actions}>
         <button type="button" className={styles.primaryButton} onClick={sendEmail} disabled={sending}>
-          {sending ? 'Sending...' : 'Send via Microsoft'}
+          {sending ? 'Sending...' : 'Send Email'}
         </button>
         <button type="button" className={styles.primaryButton} onClick={copyEmail}>
           {copied ? ' Copied!' : 'Copy to Clipboard'}
@@ -192,7 +194,7 @@ function EmailTab() {
       {status && <div className={styles.note}>{status}</div>}
 
       <div className={styles.note}>
-        Copy this email and paste it into your email client (Gmail, Outlook, etc.)
+        If backend sending is not configured, you can still copy this email into Gmail, Outlook, or another client.
       </div>
     </div>
   );

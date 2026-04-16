@@ -25,6 +25,7 @@ from .profanity_filter import sanitize_text
 from .RAG import retrieve
 from .livewhale import get_upcoming_events
 from .qu_topic_redirects import get_topic_redirect, looks_like_idk_reply
+from mail_service import parse_recipients, send_email
 
 
 def _configure_console_encoding() -> None:
@@ -105,6 +106,17 @@ EVENTS_TRIGGER = re.compile(
     re.I,
 )
 SPORT_WORDS = re.compile(r"\b(basketball|hockey|soccer|baseball|softball|volleyball|lacrosse)\b", re.I)
+EMAIL_COMMAND_TRIGGER = re.compile(
+    r"(?:\b(send|write|compose|draft)\b[^\n]{0,40}\bemail\b)|(?:\bemail\b[^\n]{0,20}\bto\b)",
+    re.I,
+)
+EMAIL_ADDRESS_RE = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.I)
+EMAIL_ACTION_WORDS = re.compile(r"\b(send|email|mail|compose|draft|write|message)\b", re.I)
+EMAIL_SUBJECT_RE = re.compile(r"\bsubject\s*:\s*(.+?)(?=(?:\bbody\s*:|\bmessage\s*:|$))", re.I | re.S)
+EMAIL_BODY_RE = re.compile(r"\b(?:body|message)\s*:\s*(.+)$", re.I | re.S)
+EMAIL_TELL_RE = re.compile(r"\b(?:telling|tell)\s+(?:them|him|her)\b\s*(?:that)?\s*(.+)$", re.I | re.S)
+EMAIL_SAYING_RE = re.compile(r"\bsay(?:ing)?\b\s*(?:that)?\s*(.+)$", re.I | re.S)
+SAME_RECIPIENT_RE = re.compile(r"\b(?:same\s+(?:account|email|address|recipient)|that\s+(?:same\s+)?(?:account|email|address|recipient))\b", re.I)
 
 
 #Enable FAQ priority: check FAQs before calling RAG
@@ -146,6 +158,32 @@ prompt_template = ChatPromptTemplate.from_messages([
      "- Do not include empty parentheses\n"
      "- Do not include citations or URLs inside the answer. I will display sources separately."),
     ("human", "Context:\n{context}\n\nUser: {question}")
+])
+
+email_extraction_prompt = ChatPromptTemplate.from_messages([
+    (
+        "system",
+        "You extract email-sending instructions from a user message. "
+        "Return JSON only with this exact shape: "
+        '{"send_email": true|false, "to": ["recipient@example.com"], "subject": "...", "body": "...", "missing": ["recipient"|"body"]}. '
+        "Rules: set send_email=true only when the user is explicitly asking to send an email now. "
+        "If they are only asking about email features or drafting in general, set send_email=false. "
+        "Infer a concise professional subject whenever the user does not provide one explicitly. "
+        "Compose the body as a polished final email based on the user's instruction, even when the user only gives a short description like 'saying the assignment is due at 5pm'. "
+        "If the user says 'same account', 'same recipient', or similar, use the most recent recipient from the provided context. "
+        "Only mark body as missing when there is genuinely not enough information to write a message. "
+        "If the request lacks a recipient and recent-recipient context does not solve it, include recipient in missing. "
+        "Never add markdown fences or commentary."
+    ),
+    (
+        "human",
+        "Recent recipients: {recent_recipients}\n\n"
+        "User message: {question}\n\n"
+        "Examples:\n"
+        "- 'Send an email to student@example.com saying the assignment is due at 5pm' -> send_email=true, to=['student@example.com'], subject like 'Assignment Reminder', body is a polished reminder email.\n"
+        "- 'Send an email to the same account saying class is canceled tomorrow' -> use the most recent recipient from context.\n"
+        "- 'Can you send emails?' -> send_email=false."
+    ),
 ])
 
 # intiialize database connnection
@@ -249,6 +287,170 @@ def answer_with_rag(question: str) -> dict:
         return {"reply": redirect["reply"], "sources": redirect["sources"]}
     # retrun reply
     return{"reply": reply_text, "sources": sources[:5]}
+
+
+def _extract_json_object(text: str) -> dict | None:
+    raw = (text or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("```"):
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    try:
+        return json.loads(raw)
+    except Exception:
+        match = re.search(r"\{.*\}", raw, re.S)
+        if not match:
+            return None
+        try:
+            return json.loads(match.group(0))
+        except Exception:
+            return None
+
+
+def _get_recent_email_recipients(username: str | None, limit: int = 10) -> list[str]:
+    if not username or username == "anonymous":
+        return []
+
+    recent_history = _get_recent_conversation_history(username, limit=limit)
+    recipients = []
+    seen = set()
+    for item in reversed(recent_history):
+        text = str(item.get("text") or "")
+        for address in EMAIL_ADDRESS_RE.findall(text):
+            normalized = address.strip().lower()
+            if normalized and normalized not in seen:
+                recipients.append(normalized)
+                seen.add(normalized)
+    return recipients
+
+
+def _extract_email_request_heuristic(message: str, username: str | None = None) -> dict | None:
+    text = (message or "").strip()
+    recipients = parse_recipients(",".join(EMAIL_ADDRESS_RE.findall(text)))
+    if not recipients and SAME_RECIPIENT_RE.search(text):
+        recipients = _get_recent_email_recipients(username, limit=10)[:1]
+    has_email_intent = bool(EMAIL_ACTION_WORDS.search(text)) and (
+        bool(recipients) or bool(re.search(r"\b(email|mail|message)\b", text, re.I))
+    )
+
+    if not has_email_intent:
+        return None
+
+    subject_match = EMAIL_SUBJECT_RE.search(text)
+    body_match = EMAIL_BODY_RE.search(text)
+    tell_match = EMAIL_TELL_RE.search(text)
+
+    subject = (subject_match.group(1).strip() if subject_match else "") or "Message from QChat"
+    email_body = ""
+    if body_match:
+        email_body = body_match.group(1).strip()
+    elif tell_match:
+        email_body = tell_match.group(1).strip()
+    else:
+        saying_match = EMAIL_SAYING_RE.search(text)
+        if saying_match:
+            email_body = saying_match.group(1).strip()
+
+    missing = []
+    if not recipients:
+        missing.append("recipient")
+    if not email_body:
+        missing.append("body")
+
+    return {
+        "recipients": recipients,
+        "subject": subject,
+        "body": email_body,
+        "missing": missing,
+    }
+
+
+def _extract_email_request(message: str, username: str | None = None) -> dict | None:
+    heuristic_request = _extract_email_request_heuristic(message, username)
+    if not EMAIL_COMMAND_TRIGGER.search(message or "") and heuristic_request is None:
+        return None
+
+    recent_recipients = _get_recent_email_recipients(username, limit=5)
+    recent_recipients_text = ", ".join(recent_recipients) if recent_recipients else "none"
+
+    try:
+        extraction = llm.invoke(
+            email_extraction_prompt.invoke(
+                {"question": message, "recent_recipients": recent_recipients_text}
+            )
+        ).content
+    except Exception as exc:
+        _safe_log("Email extraction failed:", repr(exc))
+        extraction = ""
+
+    parsed = _extract_json_object(extraction) or {}
+    if not parsed.get("send_email"):
+        return heuristic_request
+
+    raw_to = parsed.get("to") or []
+    if isinstance(raw_to, str):
+        raw_to = [raw_to]
+    if not isinstance(raw_to, list):
+        raw_to = []
+
+    recipients = parse_recipients(",".join(str(item).strip() for item in raw_to if str(item).strip()))
+    if not recipients and SAME_RECIPIENT_RE.search(message or ""):
+        recipients = recent_recipients[:1]
+
+    if not recipients:
+        recipients = parse_recipients(",".join(EMAIL_ADDRESS_RE.findall(message or "")))
+
+    missing = parsed.get("missing") or []
+    if not isinstance(missing, list):
+        missing = []
+
+    subject = str(parsed.get("subject") or "").strip() or "Message from QChat"
+    email_body = str(parsed.get("body") or "").strip()
+
+    if not recipients and "recipient" not in missing:
+        missing.append("recipient")
+    if not email_body:
+        saying_match = EMAIL_SAYING_RE.search(message or "")
+        if saying_match:
+            email_body = saying_match.group(1).strip()
+
+    if not email_body and "body" not in missing:
+        missing.append("body")
+
+    if subject == "Message from QChat" and email_body:
+        heuristic_subject = ""
+        if "assignment" in email_body.lower():
+            heuristic_subject = "Assignment Reminder"
+        elif "class" in email_body.lower() and "cancel" in email_body.lower():
+            heuristic_subject = "Class Update"
+        elif "meeting" in email_body.lower():
+            heuristic_subject = "Meeting Update"
+        if heuristic_subject:
+            subject = heuristic_subject
+
+    extracted_request = {
+        "recipients": recipients,
+        "subject": subject,
+        "body": email_body,
+        "missing": missing,
+    }
+
+    if not recipients or not email_body:
+        return heuristic_request or extracted_request
+
+    return extracted_request
+
+
+def _build_email_help_reply(missing: list[str]) -> str:
+    if not missing:
+        missing = ["recipient", "body"]
+
+    missing_text = ", ".join(missing)
+    return (
+        f"I can send that email, but I still need: {missing_text}. "
+        "Use a request like: Send an email to student@example.com subject: Class update body: Class is canceled tomorrow."
+    )
 
 def _get_recent_conversation_history(username: str, limit: int = 10) -> list:
     """
@@ -372,6 +574,8 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     action = body.get("action") or req.params.get("action") or "chat"
     user_id = body.get("userId") or req.params.get("userId") or "anonymous"
     username = body.get("username") or req.params.get("username") or user_id
+    role = (body.get("role") or req.params.get("role") or "anonymous").strip().lower()
+    sender_name = (body.get("senderName") or req.params.get("senderName") or username or "").strip()
     msg = ""
     
     # Ensure user profile exists for non-anonymous users
@@ -403,92 +607,105 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
     if not msg:
         return func.HttpResponse('{"error":"missing message"}', status_code=400, mimetype="application/json")
 
-
-    '''
-    unified response stuff- dont think this is needed
-    # Unified response system - bot has access to profile, FAQ, and web content
-    # and intelligently decides what to use based on the question
-    try:
-        #reply = get_unified_response(msg, username if username != "anonymous" else None)
-        
-        # Smart profile extraction using LLM for non-anonymous users
-        if username and username != "anonymous":
-            try:
-                _smart_extract_and_save_profile(username, msg, reply.get("reply", ""))
-            except Exception as e:
-                print(f"Error in smart profile extraction: {repr(e)}")
-                
-    except Exception as e:
-        print(f"Error in unified response: {repr(e)}")
-        reply = {
-            "reply": "I don't know.",
-            "sources": [],
-            "source": "error",
-        }
-    '''
-
-    # FAQ matcher logic + RAG fallback
-    try:
-        if _is_thanks_only_message(msg):
+    email_request = _extract_email_request(msg, username)
+    if email_request is not None:
+        if username == "anonymous" or role not in {"teacher", "admin"}:
             reply = {
-                "reply": _THANKS_REPLY_TEXT,
+                "reply": "Sending email through chat is only available for logged-in teacher or admin accounts.",
                 "sources": [],
-                "source": "thanks",
+                "source": "email_auth",
+            }
+        elif email_request.get("missing"):
+            reply = {
+                "reply": _build_email_help_reply(email_request["missing"]),
+                "sources": [],
+                "source": "email_missing_fields",
             }
         else:
-            faq_result = None
-            if QCHAT_FAQ_FIRST:
-                _safe_log(f"Checking FAQ for: {msg}")
-                faq_result = check_faq_by_keywords(msg)
-
-            if faq_result:
-                _safe_log(
-                    f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}"
+            try:
+                provider = send_email(
+                    email_request["recipients"],
+                    email_request["subject"],
+                    email_request["body"],
+                    sender_name,
                 )
+                recipients_text = ", ".join(email_request["recipients"])
                 reply = {
-                    "reply": faq_result.get("reply"),
-                    "sources": faq_result.get("sources", []),
-                    "source": "faq",
-                    "category": faq_result.get("category"),
-                    "faqScore": faq_result.get("faqScore"),
+                    "reply": f"I sent the email to {recipients_text} with subject \"{email_request['subject']}\" via {provider}.",
+                    "sources": [],
+                    "source": "email",
                 }
-            elif EVENTS_TRIGGER.search(msg):
-                events = get_upcoming_events(limit=10, query=msg)
+            except Exception as e:
+                err_msg = repr(e)
+                _safe_log("Error sending chat email:", err_msg)
+                reply = {
+                    "reply": f"I couldn't send the email. Backend error: {err_msg}",
+                    "sources": [],
+                    "source": "email_error",
+                }
+    else:
+        # FAQ matcher logic + RAG fallback
+        try:
+            if _is_thanks_only_message(msg):
+                reply = {
+                    "reply": _THANKS_REPLY_TEXT,
+                    "sources": [],
+                    "source": "thanks",
+                }
+            else:
+                faq_result = None
+                if QCHAT_FAQ_FIRST:
+                    _safe_log(f"Checking FAQ for: {msg}")
+                    faq_result = check_faq_by_keywords(msg)
 
-                if events:
-                    reply_text = "Here are upcoming Quinnipiac events:\n\n"
-                    for e in events:
-                        reply_text += f"• {e['title']}\n  {e['link']}\n\n"
+                if faq_result:
+                    _safe_log(
+                        f"FAQ match found! Category: {faq_result.get('category')}, Score: {faq_result.get('faqScore')}"
+                    )
                     reply = {
-                        "reply": reply_text,
-                        "sources": [e["link"] for e in events],
-                        "source": "livewhale",
+                        "reply": faq_result.get("reply"),
+                        "sources": faq_result.get("sources", []),
+                        "source": "faq",
+                        "category": faq_result.get("category"),
+                        "faqScore": faq_result.get("faqScore"),
                     }
+                elif EVENTS_TRIGGER.search(msg):
+                    events = get_upcoming_events(limit=10, query=msg)
+
+                    if events:
+                        reply_text = "Here are upcoming Quinnipiac events:\n\n"
+                        for e in events:
+                            reply_text += f"• {e['title']}\n  {e['link']}\n\n"
+                        reply = {
+                            "reply": reply_text,
+                            "sources": [e["link"] for e in events],
+                            "source": "livewhale",
+                        }
+                    else:
+                        _safe_log("No livewhale match, using RAG...")
+                        rag_result = answer_with_rag(msg)
+                        reply = {
+                            "reply": rag_result.get("reply", "I don't know."),
+                            "sources": rag_result.get("sources", []),
+                            "source": "rag",
+                        }
                 else:
-                    _safe_log("No livewhale match, using RAG...")
+                    _safe_log("No FAQ match, using RAG...")
                     rag_result = answer_with_rag(msg)
                     reply = {
                         "reply": rag_result.get("reply", "I don't know."),
                         "sources": rag_result.get("sources", []),
                         "source": "rag",
                     }
-            else:
-                _safe_log("No FAQ match, using RAG...")
-                rag_result = answer_with_rag(msg)
-                reply = {
-                    "reply": rag_result.get("reply", "I don't know."),
-                    "sources": rag_result.get("sources", []),
-                    "source": "rag",
-                }
-    except Exception as e:
-        err_msg = repr(e)
-        _safe_log(f"Error in FAQ/RAG processing: {err_msg}")
-        # Surface error to user so they can fix (e.g. model not found, connection refused)
-        reply = {
-            "reply": f"I don't know. (Backend error: {err_msg})",
-            "sources": [],
-            "source": "error",
-        }
+        except Exception as e:
+            err_msg = repr(e)
+            _safe_log(f"Error in FAQ/RAG processing: {err_msg}")
+            # Surface error to user so they can fix (e.g. model not found, connection refused)
+            reply = {
+                "reply": f"I don't know. (Backend error: {err_msg})",
+                "sources": [],
+                "source": "error",
+            }
 
 
     response = func.HttpResponse(

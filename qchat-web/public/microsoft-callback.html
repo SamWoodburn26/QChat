@@ -5,12 +5,6 @@
 </head>
 <body>
   <script>
-    function base64UrlDecode(input) {
-      const b64 = input.replace(/-/g, '+').replace(/_/g, '/');
-      const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
-      return atob(padded);
-    }
-
     function readPopupContext() {
       try {
         return window.name ? JSON.parse(window.name) : {};
@@ -69,66 +63,41 @@
       const openerOriginKey = `ms.oauth.openerOrigin.${state}`;
       const codeVerifier = (popupContext.state === state ? popupContext.codeVerifier : '') || localStorage.getItem(verifierKey);
       const expectedNonce = (popupContext.state === state ? popupContext.nonce : '') || localStorage.getItem(nonceKey);
-      const clientId = popupContext.clientId || localStorage.getItem('ms.oauth.clientId');
-      const tenantId = popupContext.tenantId || localStorage.getItem('ms.oauth.tenantId') || 'common';
       const redirectUri = popupContext.redirectUri || localStorage.getItem(redirectKey) || `${window.location.origin}/microsoft-callback.html`;
       const openerOrigin = popupContext.openerOrigin || localStorage.getItem(openerOriginKey) || window.location.origin;
 
       cleanupState(state);
 
-      if (!codeVerifier || !clientId) {
-        postError('Missing PKCE verifier or Microsoft client ID.');
+      if (!codeVerifier) {
+        postError('Missing PKCE verifier for Microsoft login.');
         return;
       }
 
-      const tokenUrl = `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`;
-      const body = new URLSearchParams({
-        client_id: clientId,
-        grant_type: 'authorization_code',
-        code,
-        redirect_uri: redirectUri,
-        code_verifier: codeVerifier,
-        scope: 'openid profile email'
-      });
-
-      const tokenResp = await fetch(tokenUrl, {
+      const exchangeResp = await fetch('/api/auth', {
         method: 'POST',
         headers: {
-          'Content-Type': 'application/x-www-form-urlencoded'
+          'Content-Type': 'application/json'
         },
-        body: body.toString()
+        body: JSON.stringify({
+          action: 'microsoft_exchange_code',
+          code,
+          codeVerifier,
+          redirectUri,
+          expectedNonce,
+        })
       });
 
-      if (!tokenResp.ok) {
-        const errText = await tokenResp.text();
-        postError(`Token exchange failed: ${errText}`);
-        return;
-      }
-
-      const tokenJson = await tokenResp.json();
-      const idToken = tokenJson.id_token;
-      if (!idToken) {
-        postError('No id_token returned from Microsoft token endpoint.');
-        return;
-      }
-
-      const parts = idToken.split('.');
-      if (parts.length !== 3) {
-        postError('Invalid id_token format.');
-        return;
-      }
-
-      const payload = JSON.parse(base64UrlDecode(parts[1]));
-      if (expectedNonce && payload.nonce !== expectedNonce) {
-        postError('Nonce validation failed.');
+      const exchangeJson = await exchangeResp.json();
+      if (!exchangeResp.ok || !exchangeJson.success) {
+        postError(exchangeJson.error || exchangeJson.details || 'Microsoft token exchange failed.');
         return;
       }
 
       if (window.opener) {
         window.opener.postMessage({
           type: 'microsoft-login',
-          email: payload.email || payload.preferred_username,
-          name: payload.name
+          email: exchangeJson.username,
+          name: exchangeJson.name
         }, openerOrigin);
       }
 

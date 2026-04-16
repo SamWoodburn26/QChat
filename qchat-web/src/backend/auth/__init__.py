@@ -1,10 +1,12 @@
 import azure.functions as func
 import json
 import os
+import base64
 from datetime import datetime
 from pymongo import MongoClient
 import certifi
 import hashlib
+import requests
 
 from env_loader import load_backend_env
 
@@ -47,6 +49,51 @@ def _init_db():
 def _hash_password(password: str) -> str:
     """Simple password hashing (use bcrypt in production)."""
     return hashlib.sha256(password.encode()).hexdigest()
+
+
+def _decode_jwt_payload(id_token: str) -> dict:
+    parts = id_token.split(".")
+    if len(parts) != 3:
+        raise RuntimeError("Invalid id_token format")
+    payload_part = parts[1]
+    padded = payload_part + "=" * ((4 - (len(payload_part) % 4)) % 4)
+    decoded = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
+    return json.loads(decoded)
+
+
+def _exchange_microsoft_code(code: str, code_verifier: str, redirect_uri: str) -> dict:
+    tenant_id = os.getenv("MICROSOFT_TENANT_ID", "common").strip() or "common"
+    client_id = os.getenv("MICROSOFT_CLIENT_ID", "").strip()
+    client_secret = os.getenv("MICROSOFT_CLIENT_SECRET", "").strip()
+
+    if not client_id or not client_secret:
+        raise RuntimeError("Microsoft code exchange is not configured. Set MICROSOFT_CLIENT_ID and MICROSOFT_CLIENT_SECRET.")
+
+    token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+    token_resp = requests.post(
+        token_url,
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "authorization_code",
+            "code": code,
+            "redirect_uri": redirect_uri,
+            "code_verifier": code_verifier,
+            "scope": "openid profile email",
+        },
+        timeout=20,
+    )
+
+    if not token_resp.ok:
+        raise RuntimeError(f"Token exchange failed: {token_resp.text}")
+
+    token_json = token_resp.json()
+    id_token = token_json.get("id_token")
+    if not id_token:
+        raise RuntimeError("No id_token returned from Microsoft token endpoint")
+
+    return _decode_jwt_payload(id_token)
 
 
 def main(req: func.HttpRequest) -> func.HttpResponse:
@@ -187,6 +234,62 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
                 "role": role,
                 "message": "Microsoft login successful"
             }
+
+        elif action == "microsoft_exchange_code":
+            code = body.get("code", "").strip()
+            code_verifier = body.get("codeVerifier", "").strip()
+            redirect_uri = body.get("redirectUri", "").strip()
+            expected_nonce = body.get("expectedNonce", "").strip()
+
+            if not code or not code_verifier or not redirect_uri:
+                result = {
+                    "success": False,
+                    "error": "Missing code exchange parameters"
+                }
+            else:
+                payload = _exchange_microsoft_code(code, code_verifier, redirect_uri)
+
+                nonce = (payload.get("nonce") or "").strip()
+                if expected_nonce and nonce != expected_nonce:
+                    result = {
+                        "success": False,
+                        "error": "Nonce validation failed"
+                    }
+                else:
+                    email = (payload.get("email") or payload.get("preferred_username") or "").strip().lower()
+                    if not email:
+                        result = {
+                            "success": False,
+                            "error": "No email/username returned from Microsoft token"
+                        }
+                    else:
+                        name = (payload.get("name") or email).strip()
+                        existing = users_collection.find_one({"username": email})
+
+                        if existing:
+                            users_collection.update_one(
+                                {"username": email},
+                                {"$set": {"lastLogin": datetime.utcnow()}}
+                            )
+                            role = existing.get("role", "student")
+                        else:
+                            role = "student"
+                            users_collection.insert_one({
+                                "username": email,
+                                "name": name,
+                                "authProvider": "microsoft",
+                                "role": role,
+                                "createdAt": datetime.utcnow(),
+                                "lastLogin": datetime.utcnow()
+                            })
+
+                        result = {
+                            "success": True,
+                            "username": email,
+                            "name": name,
+                            "role": role,
+                            "message": "Microsoft login successful"
+                        }
         
         elif action == "google_login":
             # Google OAuth login - no password needed
@@ -225,7 +328,7 @@ def main(req: func.HttpRequest) -> func.HttpResponse:
         else:
             result = {
                 "success": False,
-                "error": "Invalid action. Use 'login', 'register', 'microsoft_login', or 'google_login'"
+                "error": "Invalid action. Use 'login', 'register', 'microsoft_login', 'google_login', or 'microsoft_exchange_code'"
             }
 
     except Exception as e:
