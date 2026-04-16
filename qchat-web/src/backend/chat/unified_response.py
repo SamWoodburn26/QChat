@@ -15,6 +15,10 @@ from typing import Optional, Dict, Any
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 
+from env_loader import load_backend_env
+
+load_backend_env()
+
 from .profile_service import get_user_profile
 from .faq_data import FAQ_DATA
 from .profanity_filter import sanitize_text

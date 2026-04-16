@@ -2,6 +2,8 @@ import * as React from 'react';
 import styles from './TeacherPanel.module.css';
 
 type Tab = 'email' | 'blackboard' | 'canvas';
+const configuredServerUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:7071';
+const llm_base = import.meta.env.DEV ? '' : configuredServerUrl;
 
 export default function TeacherPanel(props: { onClose: () => void }) {
   const [activeTab, setActiveTab] = React.useState<Tab>('email');
@@ -58,6 +60,8 @@ function EmailTab() {
   const [subject, setSubject] = React.useState('');
   const [body, setBody] = React.useState('');
   const [copied, setCopied] = React.useState(false);
+  const [sending, setSending] = React.useState(false);
+  const [status, setStatus] = React.useState<string | null>(null);
 
   function copyEmail() {
     const emailText = `To: ${to}\nSubject: ${subject}\n\n${body}`;
@@ -71,6 +75,41 @@ function EmailTab() {
     setTo('');
     setSubject('');
     setBody('');
+    setStatus(null);
+  }
+
+  async function sendEmail() {
+    setStatus(null);
+    if (!to.trim() || !subject.trim() || !body.trim()) {
+      setStatus('Please fill in To, Subject, and Message.');
+      return;
+    }
+
+    setSending(true);
+    try {
+      const response = await fetch(`${llm_base}/api/send_mail`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          to,
+          subject,
+          body,
+        }),
+      });
+
+      const data = await response.json();
+      if (!response.ok || !data.success) {
+        setStatus(data.error || data.details || `Email send failed (${response.status}).`);
+        return;
+      }
+
+      setStatus('Email sent successfully.');
+    } catch (error) {
+      console.error('Send email error:', error);
+      setStatus('Could not send email. Check backend and Microsoft app permissions.');
+    } finally {
+      setSending(false);
+    }
   }
 
   function useTemplate(template: string) {
@@ -139,6 +178,9 @@ function EmailTab() {
       </div>
 
       <div className={styles.actions}>
+        <button type="button" className={styles.primaryButton} onClick={sendEmail} disabled={sending}>
+          {sending ? 'Sending...' : 'Send via Microsoft'}
+        </button>
         <button type="button" className={styles.primaryButton} onClick={copyEmail}>
           {copied ? ' Copied!' : 'Copy to Clipboard'}
         </button>
@@ -146,6 +188,8 @@ function EmailTab() {
           Clear
         </button>
       </div>
+
+      {status && <div className={styles.note}>{status}</div>}
 
       <div className={styles.note}>
         Copy this email and paste it into your email client (Gmail, Outlook, etc.)

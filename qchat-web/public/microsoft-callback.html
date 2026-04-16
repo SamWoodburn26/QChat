@@ -5,28 +5,139 @@
 </head>
 <body>
   <script>
-    // Parse the ID token from the URL fragment
-    const hash = window.location.hash.substring(1);
-    const params = new URLSearchParams(hash);
-    const idToken = params.get('id_token');
-    
-    if (idToken) {
-      // Decode the JWT token (simplified - just parse the payload)
-      const parts = idToken.split('.');
-      if (parts.length === 3) {
-        const payload = JSON.parse(atob(parts[1]));
-        
-        // Send the user info back to the parent window
-        if (window.opener) {
-          window.opener.postMessage({
-            type: 'microsoft-login',
-            email: payload.email || payload.preferred_username,
-            name: payload.name
-          }, window.location.origin);
-          window.close();
-        }
+    function base64UrlDecode(input) {
+      const b64 = input.replace(/-/g, '+').replace(/_/g, '/');
+      const padded = b64 + '='.repeat((4 - (b64.length % 4)) % 4);
+      return atob(padded);
+    }
+
+    function readPopupContext() {
+      try {
+        return window.name ? JSON.parse(window.name) : {};
+      } catch {
+        return {};
       }
     }
+
+    function cleanupState(state) {
+      if (!state) return;
+      localStorage.removeItem(`ms.pkce.verifier.${state}`);
+      localStorage.removeItem(`ms.oauth.nonce.${state}`);
+      localStorage.removeItem(`ms.oauth.redirectUri.${state}`);
+      localStorage.removeItem(`ms.oauth.openerOrigin.${state}`);
+      window.name = '';
+    }
+
+    function postError(message) {
+      const query = new URLSearchParams(window.location.search);
+      const state = query.get('state');
+      const popupContext = readPopupContext();
+      const openerOrigin = popupContext.openerOrigin || (state ? localStorage.getItem(`ms.oauth.openerOrigin.${state}`) : null) || window.location.origin;
+
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'microsoft-login-error',
+          error: message
+        }, openerOrigin);
+      }
+
+      cleanupState(state);
+      window.close();
+    }
+
+    async function completeMicrosoftLogin() {
+      const query = new URLSearchParams(window.location.search);
+      const code = query.get('code');
+      const state = query.get('state');
+      const error = query.get('error');
+      const errorDescription = query.get('error_description');
+
+      if (error) {
+        postError(errorDescription || error);
+        return;
+      }
+
+      if (!code || !state) {
+        postError('Missing authorization response from Microsoft.');
+        return;
+      }
+
+      const popupContext = readPopupContext();
+      const verifierKey = `ms.pkce.verifier.${state}`;
+      const nonceKey = `ms.oauth.nonce.${state}`;
+      const redirectKey = `ms.oauth.redirectUri.${state}`;
+      const openerOriginKey = `ms.oauth.openerOrigin.${state}`;
+      const codeVerifier = (popupContext.state === state ? popupContext.codeVerifier : '') || localStorage.getItem(verifierKey);
+      const expectedNonce = (popupContext.state === state ? popupContext.nonce : '') || localStorage.getItem(nonceKey);
+      const clientId = popupContext.clientId || localStorage.getItem('ms.oauth.clientId');
+      const tenantId = popupContext.tenantId || localStorage.getItem('ms.oauth.tenantId') || 'common';
+      const redirectUri = popupContext.redirectUri || localStorage.getItem(redirectKey) || `${window.location.origin}/microsoft-callback.html`;
+      const openerOrigin = popupContext.openerOrigin || localStorage.getItem(openerOriginKey) || window.location.origin;
+
+      cleanupState(state);
+
+      if (!codeVerifier || !clientId) {
+        postError('Missing PKCE verifier or Microsoft client ID.');
+        return;
+      }
+
+      const tokenUrl = `https://login.microsoftonline.com/${encodeURIComponent(tenantId)}/oauth2/v2.0/token`;
+      const body = new URLSearchParams({
+        client_id: clientId,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: redirectUri,
+        code_verifier: codeVerifier,
+        scope: 'openid profile email'
+      });
+
+      const tokenResp = await fetch(tokenUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded'
+        },
+        body: body.toString()
+      });
+
+      if (!tokenResp.ok) {
+        const errText = await tokenResp.text();
+        postError(`Token exchange failed: ${errText}`);
+        return;
+      }
+
+      const tokenJson = await tokenResp.json();
+      const idToken = tokenJson.id_token;
+      if (!idToken) {
+        postError('No id_token returned from Microsoft token endpoint.');
+        return;
+      }
+
+      const parts = idToken.split('.');
+      if (parts.length !== 3) {
+        postError('Invalid id_token format.');
+        return;
+      }
+
+      const payload = JSON.parse(base64UrlDecode(parts[1]));
+      if (expectedNonce && payload.nonce !== expectedNonce) {
+        postError('Nonce validation failed.');
+        return;
+      }
+
+      if (window.opener) {
+        window.opener.postMessage({
+          type: 'microsoft-login',
+          email: payload.email || payload.preferred_username,
+          name: payload.name
+        }, openerOrigin);
+      }
+
+      window.close();
+    }
+
+    completeMicrosoftLogin().catch((err) => {
+      postError(err && err.message ? err.message : 'Microsoft login failed.');
+    });
   </script>
   <p>Processing login...</p>
 </body>

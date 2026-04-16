@@ -14,6 +14,10 @@ from typing import Dict, List, Any, Optional
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 
+from env_loader import load_backend_env
+
+load_backend_env()
+
 # LLM Configuration
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "mistral:latest")

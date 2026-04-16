@@ -6,14 +6,51 @@ import LoginDropdown from './LoginDropdown.tsx';
 import styles from './QChat.module.css';
 import TMImage from '../assets/TM.png';
 import bobcatImage from '../assets/Bobcat.png';
-import localSettings from '../../backend/local.settings.json';
 import AdminPanel from './AdminPanel';
 import TeacherPanel from './TeacherPanel';
 
 type Msg = { role: 'user' | 'assistant'; text: string; source?: string };
 type Conversation = { id: string; title: string; messages: Msg[]; created: string };
 
-const llm_base = localSettings.Values.SERVER_URL || 'http://localhost:7071';
+const configuredServerUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:7071';
+const llm_base = import.meta.env.DEV ? '' : configuredServerUrl;
+const microsoftClientId = (import.meta.env.VITE_MICROSOFT_CLIENT_ID || '').trim();
+const microsoftTenantId = (import.meta.env.VITE_MICROSOFT_TENANT_ID || 'common').trim();
+const configuredMicrosoftRedirectUri = (import.meta.env.VITE_MICROSOFT_REDIRECT_URI || '').trim();
+
+function randomPkceString(length = 64): string {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~';
+  const values = new Uint32Array(length);
+  crypto.getRandomValues(values);
+  let out = '';
+  for (let i = 0; i < length; i += 1) {
+    out += chars[values[i] % chars.length];
+  }
+  return out;
+}
+
+async function sha256Base64Url(input: string): Promise<string> {
+  const bytes = new TextEncoder().encode(input);
+  const digest = await crypto.subtle.digest('SHA-256', bytes);
+  const hashBytes = new Uint8Array(digest);
+  let binary = '';
+  hashBytes.forEach((b) => {
+    binary += String.fromCharCode(b);
+  });
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
+}
+
+function getMicrosoftRedirectUri(): string {
+  return configuredMicrosoftRedirectUri || `${window.location.origin}/microsoft-callback.html`;
+}
+
+function getUrlOrigin(value: string): string {
+  try {
+    return new URL(value).origin;
+  } catch {
+    return window.location.origin;
+  }
+}
 
 function escapeHtml(text: string): string {
   return text
@@ -48,7 +85,6 @@ function linkifyText(text: string): string {
 }
 
 export default function QChat() {
-  const [hasError, setHasError] = React.useState(false);
   const messagesEndRef = React.useRef<HTMLDivElement>(null);
   const [isLoading, setIsLoading] = React.useState(false);
   
@@ -64,10 +100,6 @@ export default function QChat() {
     console.log('QChat component mounted');
   }, []);
 
-  if (hasError) {
-    return <div style={{ padding: 20, color: 'red' }}>Error loading QChat</div>;
-  }
-
   const [msgs, setMsgs] = React.useState<Msg[]>([
     { role: 'assistant', text: 'Hi! Ask me about MyQ resources.' }
   ]);
@@ -77,7 +109,6 @@ export default function QChat() {
   }, [msgs]);
 
   const [input, setInput] = React.useState('');
-  const [showPage, setShowPage] = React.useState(false);
   const [showHelpTab, setShowHelpTab] = React.useState(false);
   const [showTips, setShowTips] = React.useState(true);
   const [historyOpen, setHistoryOpen] = React.useState(false);
@@ -188,7 +219,7 @@ export default function QChat() {
     } catch (err) {
       console.error('Chat request error', err);
       const message = err instanceof Error
-        ? (err.message.startsWith('HTTP ') ? `Backend returned ${err.message}. Check that the API and Ollama are running.` : `Could not reach backend: ${err.message}. Is the backend running at ${llm_base}?`)
+        ? (err.message.startsWith('HTTP ') ? `Backend returned ${err.message}. Check that the API and Ollama are running.` : `Could not reach backend: ${err.message}. Is the backend running at ${configuredServerUrl}?`)
         : "Could not access LLM. Please check that (1) the backend is running (e.g. func start) and (2) Ollama is running and reachable.";
       setMsgs(m => [...m, { role: 'assistant', text: message }]);
     }
@@ -314,28 +345,78 @@ export default function QChat() {
     setLoginOpen(false);
   }
 
-  function handleMicrosoftLogin() {
-    const clientId = 'YOUR_MICROSOFT_CLIENT_ID';
-    const redirectUri = encodeURIComponent(window.location.origin);
-    const scope = encodeURIComponent('openid profile email');
-    const responseType = 'id_token';
-    const nonce = Math.random().toString(36).substring(2);
-    
-    const authUrl = `https://login.microsoftonline.com/common/oauth2/v2.0/authorize?` +
-      `client_id=${clientId}` +
-      `&response_type=${responseType}` +
-      `&redirect_uri=${redirectUri}` +
-      `&scope=${scope}` +
-      `&response_mode=fragment` +
-      `&nonce=${nonce}`;
-    
-    const popup = window.open(authUrl, 'Microsoft Login', 'width=500,height=600');
-    
-    window.addEventListener('message', async (event) => {
-      if (event.origin !== window.location.origin) return;
+  async function handleMicrosoftLogin() {
+    if (!microsoftClientId) {
+      alert('Microsoft login is not configured. Set VITE_MICROSOFT_CLIENT_ID in .env.local.');
+      return;
+    }
+
+    const tenantId = microsoftTenantId || 'common';
+    const redirectUri = getMicrosoftRedirectUri();
+    const redirectOrigin = getUrlOrigin(redirectUri);
+    const popup = window.open('', 'Microsoft Login', 'width=500,height=600');
+
+    if (!popup) {
+      alert('Microsoft login popup was blocked. Please allow pop-ups and try again.');
+      return;
+    }
+
+    const state = randomPkceString(40);
+    const nonce = randomPkceString(40);
+    const codeVerifier = randomPkceString(96);
+    const codeChallenge = await sha256Base64Url(codeVerifier);
+
+    localStorage.setItem(`ms.pkce.verifier.${state}`, codeVerifier);
+    localStorage.setItem('ms.oauth.clientId', microsoftClientId);
+    localStorage.setItem('ms.oauth.tenantId', tenantId);
+    localStorage.setItem(`ms.oauth.nonce.${state}`, nonce);
+    localStorage.setItem(`ms.oauth.redirectUri.${state}`, redirectUri);
+    localStorage.setItem(`ms.oauth.openerOrigin.${state}`, window.location.origin);
+
+    popup.name = JSON.stringify({
+      state,
+      nonce,
+      codeVerifier,
+      clientId: microsoftClientId,
+      tenantId,
+      redirectUri,
+      openerOrigin: window.location.origin,
+    });
+
+    const params = new URLSearchParams({
+      client_id: microsoftClientId,
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      response_mode: 'query',
+      scope: 'openid profile email',
+      state,
+      nonce,
+      code_challenge: codeChallenge,
+      code_challenge_method: 'S256',
+      prompt: 'select_account',
+    });
+
+    const authUrl = `https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/authorize?${params.toString()}`;
+    popup.location.href = authUrl;
+
+    const messageHandler = async (event: MessageEvent) => {
+      if (event.origin !== redirectOrigin) return;
+
+      if (event.data.type === 'microsoft-login-error') {
+        popup?.close();
+        window.removeEventListener('message', messageHandler);
+        const errorMessage = String(event.data.error || 'Microsoft login failed.');
+        if (errorMessage.includes('AADSTS500113')) {
+          alert(`${errorMessage}\n\nRegister this redirect URI in Azure App Registration: ${redirectUri}`);
+        } else {
+          alert(errorMessage);
+        }
+        return;
+      }
       
       if (event.data.type === 'microsoft-login') {
         popup?.close();
+        window.removeEventListener('message', messageHandler);
         
         const { email, name } = event.data;
         
@@ -370,67 +451,8 @@ export default function QChat() {
           alert('Microsoft login failed. Please try again.');
         }
       }
-    });
-  }
-
-  function handleGoogleLogin() {
-    const clientId = '590552919397-6bp7ppthi11rgoiiehrj0jvi0apf3ltm.apps.googleusercontent.com';
-    const redirectUri = encodeURIComponent(window.location.origin + '/google-callback.html');
-    const scope = encodeURIComponent('openid profile email');
-    const responseType = 'id_token';
-    const nonce = Math.random().toString(36).substring(2);
-    
-    const authUrl = `https://accounts.google.com/o/oauth2/v2/auth?` +
-      `client_id=${clientId}` +
-      `&response_type=${responseType}` +
-      `&redirect_uri=${redirectUri}` +
-      `&scope=${scope}` +
-      `&nonce=${nonce}`;
-    
-    const popup = window.open(authUrl, 'Google Login', 'width=500,height=600');
-    
-    const messageHandler = async (event: MessageEvent) => {
-      if (event.origin !== window.location.origin) return;
-      
-      if (event.data.type === 'google-login') {
-        popup?.close();
-        window.removeEventListener('message', messageHandler);
-        
-        const { email, name } = event.data;
-        
-        try {
-          const response = await fetch(`${llm_base}/api/auth`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              action: 'google_login',
-              username: email,
-              name: name
-            })
-          });
-
-          const data = await response.json();
-          
-          if (data.success) {
-            setCurrentUser(name || email);
-            localStorage.setItem('username', data.username);
-            localStorage.setItem('name', data.name);
-            localStorage.setItem('role', data.role);
-            setIsAdmin(data.role === 'admin');
-            setIsTeacher(data.role === 'teacher');
-            
-            await loadConversationsFromDb(email);
-            setLoginOpen(false);
-          } else {
-            alert(data.error || 'Google login failed');
-          }
-        } catch (err) {
-          console.error('Google login error:', err);
-          alert('Google login failed. Please try again.');
-        }
-      }
     };
-    
+
     window.addEventListener('message', messageHandler);
   }
 
@@ -463,7 +485,6 @@ export default function QChat() {
         onLogin={handleLogin}
         onRegister={handleRegister}
         onMicrosoftLogin={handleMicrosoftLogin}
-        onGoogleLogin={handleGoogleLogin}
         onLogout={handleLogout}
       />
       <header className={styles.headerBar}>
