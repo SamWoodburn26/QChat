@@ -157,7 +157,8 @@ export QCHAT_REQUEST_TIMEOUT=12       # Timeout per URL
 The system includes an Azure Function for nightly rebuilds:
 - **Location**: `rebuild_index/__init__.py`
 - **Configuration**: Set `QCHAT_MAX_URLS` in `local.settings.json`
-- **Trigger**: Timer-based (configure in `function.json`)
+- **Trigger**: Timer-based via `rebuild_index/function.json` (default `0 0 2 * * *`, daily at 2:00 AM)
+- **Enable/Disable**: `AzureWebJobs.rebuild_index.Disabled` (set to `"false"` to run)
 
 ## Index Location
 
